@@ -35,9 +35,9 @@ export default function SearchFilter({
     <div className="flex items-center gap-2 mb-5">
       {/* Search input */}
       <div className="relative flex-1">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm select-none">⌕</span>
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm select-none">⌕</span>
         <input
-          className="w-full border border-gray-200 bg-white rounded-lg pl-8 pr-8 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+          className="w-full border border-[#1F2937] bg-[#0F172A] rounded-lg pl-8 pr-8 py-2 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-600"
           placeholder={placeholder}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
@@ -45,7 +45,7 @@ export default function SearchFilter({
         {query && (
           <button
             onClick={() => onQueryChange("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
           >
             ×
           </button>
@@ -57,7 +57,7 @@ export default function SearchFilter({
         <button
           onClick={() => setOpen(!open)}
           className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${
-            open ? "bg-blue-50 border-blue-400 text-blue-700" : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+            open ? "bg-blue-900/20 border-blue-500 text-blue-400" : "bg-[#111827] border-[#1F2937] text-gray-400 hover:bg-[#1F2937]"
           }`}
         >
           <span>Filter by</span>
@@ -68,9 +68,9 @@ export default function SearchFilter({
         </button>
 
         {open && (
-          <div className="absolute right-0 top-10 z-20 bg-white border border-gray-200 rounded-xl shadow-lg p-3 w-44 space-y-1">
-            <div className="flex justify-between items-center pb-2 border-b border-gray-100 mb-1">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Fields</span>
+          <div className="absolute right-0 top-10 z-20 bg-[#111827] border border-[#1F2937] rounded-xl shadow-lg p-3 w-44 space-y-1">
+            <div className="flex justify-between items-center pb-2 border-b border-[#1F2937] mb-1">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Fields</span>
               <button
                 onClick={() => onFieldsChange(activeFields.length === fields.length ? [] : fields.map((f) => f.key))}
                 className="text-xs text-blue-600 hover:underline"
@@ -79,14 +79,14 @@ export default function SearchFilter({
               </button>
             </div>
             {fields.map((f) => (
-              <label key={f.key} className="flex items-center gap-2.5 px-1 py-1 rounded hover:bg-gray-50 cursor-pointer">
+              <label key={f.key} className="flex items-center gap-2.5 px-1 py-1 rounded hover:bg-[#1F2937] cursor-pointer">
                 <input
                   type="checkbox"
                   checked={activeFields.includes(f.key)}
                   onChange={() => toggle(f.key)}
                   className="w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer"
                 />
-                <span className="text-sm text-gray-700">{f.label}</span>
+                <span className="text-sm text-gray-300">{f.label}</span>
               </label>
             ))}
           </div>

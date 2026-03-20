@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0B0F14;
+  --foreground: #F9FAFB;
 }
 
 @theme inline {
@@ -12,15 +12,38 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Font size switching */
+html[data-font-size="small"] body { font-size: 13px; }
+html[data-font-size="medium"] body { font-size: 15px; }
+html[data-font-size="large"] body { font-size: 17px; }
+
+html[data-font-size="small"] .text-2xl { font-size: 1.35rem; }
+html[data-font-size="large"] .text-2xl { font-size: 1.75rem; }
+
+html[data-font-size="small"] .text-sm { font-size: 0.8rem; }
+html[data-font-size="large"] .text-sm { font-size: 0.925rem; }
+
+html[data-font-size="small"] .text-xs { font-size: 0.7rem; }
+html[data-font-size="large"] .text-xs { font-size: 0.8rem; }
+
+/* Layout density switching */
+html[data-density="compact"] .p-4 { padding: 0.75rem; }
+html[data-density="compact"] .p-5 { padding: 0.875rem; }
+html[data-density="compact"] .p-6 { padding: 1rem; }
+html[data-density="compact"] .p-8 { padding: 1.25rem; }
+html[data-density="compact"] .py-3 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+html[data-density="compact"] .py-3\.5 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+html[data-density="compact"] .gap-4 { gap: 0.75rem; }
+html[data-density="compact"] .gap-5 { gap: 0.875rem; }
+html[data-density="compact"] .gap-6 { gap: 1rem; }
+html[data-density="compact"] .mb-4 { margin-bottom: 0.75rem; }
+html[data-density="compact"] .mb-5 { margin-bottom: 0.875rem; }
+html[data-density="compact"] .mb-8 { margin-bottom: 1.25rem; }
+html[data-density="compact"] .space-y-4 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(0.75rem * calc(1 - var(--tw-space-y-reverse))); margin-bottom: calc(0.75rem * var(--tw-space-y-reverse)); }
+html[data-density="compact"] .space-y-5 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(0.875rem * calc(1 - var(--tw-space-y-reverse))); margin-bottom: calc(0.875rem * var(--tw-space-y-reverse)); }

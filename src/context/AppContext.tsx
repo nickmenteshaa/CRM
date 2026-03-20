@@ -3,11 +3,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
-  dbGetAll, dbCreateLead, dbUpdateLead, dbDeleteLead,
+  dbGetAll, dbCreateLead, dbUpdateLead, dbDeleteLead, dbBulkDeleteLeads,
   dbCreateTask, dbToggleTask,
   dbCreateDeal, dbUpdateDeal, dbDeleteDeal,
   dbCreateActivity,
-  dbCreateCompany, dbUpdateCompany, dbDeleteCompany,
+  dbCreateCompany, dbUpdateCompany, dbDeleteCompany, dbBulkDeleteCompanies,
   dbCreateMessage, dbDeleteMessage,
   dbReset,
   dbAISummarize, dbAIConversation, dbAIFollowUp,
@@ -22,14 +22,30 @@ export type Lead = {
   phone: string;
   status: string;
   source: string;
-  lastContact: string;      // display string e.g. "Today", "Mar 18"
-  lastContactAt?: string;   // ISO date string — used for 7-day staleness check
-  summary?: string;         // AI-generated activity summary
-  nextAction?: string;      // AI-suggested next best action
-  convSummary?: string;     // AI summary of pasted conversation text
-  followUpDraft?: string;   // AI-suggested follow-up message
-  ownerId?: string;         // auth user id; undefined = unassigned (visible to all)
-  createdAt?: string;       // ISO date string
+  lastContact: string;
+  lastContactAt?: string;
+  summary?: string;
+  nextAction?: string;
+  convSummary?: string;
+  followUpDraft?: string;
+  ownerId?: string;
+  createdAt?: string;
+  // Car industry fields
+  carModel?: string;
+  carYear?: string;
+  carPrice?: string;
+  carVin?: string;
+  carCondition?: string;
+  // Spare-parts customer fields
+  customerType?: string;
+  taxId?: string;
+  shippingAddress?: string;
+  billingAddress?: string;
+  paymentTerms?: string;
+  companyName?: string;
+  country?: string;
+  preferredBrands?: string;
+  customerNotes?: string;
 };
 
 export type Task = {
@@ -41,6 +57,9 @@ export type Task = {
   done: boolean;
   auto: boolean;
   ownerId?: string;
+  // Spare-parts links
+  orderId?: string;
+  supplierId?: string;
 };
 
 export type Deal = {
@@ -58,6 +77,27 @@ export type Deal = {
   updatedAt?: string;
   won?: boolean;
   lost?: boolean;
+  // Car industry fields
+  carModel?: string;
+  carYear?: string;
+  carPrice?: string;
+  carVin?: string;
+  carCondition?: string;
+  // Spare-parts order fields
+  orderNumber?: string;
+  orderStatus?: string;
+  shippingMethod?: string;
+  shippingCost?: string;
+  taxAmount?: string;
+  subtotal?: string;
+  grandTotal?: string;
+  notes?: string;
+  // RFQ / Quote fields
+  isQuote?: boolean;
+  quoteNumber?: string;
+  quoteStatus?: string;
+  validUntil?: string;
+  convertedToOrderId?: string;
 };
 
 export type Company = {
@@ -69,6 +109,96 @@ export type Company = {
   status: string;
   website?: string;
   phone?: string;
+  // Spare-parts flags
+  country?: string;
+  taxId?: string;
+  paymentTerms?: string;
+  isSupplier?: boolean;
+  isCustomer?: boolean;
+};
+
+// ── Spare Parts types (Phase 1) ──────────────────────────────────────────────
+
+export type Part = {
+  id: string;
+  sku: string;
+  name: string;
+  description?: string;
+  oemNumber?: string;
+  brand?: string;
+  categoryId?: string;
+  compatMake?: string;
+  compatModel?: string;
+  compatYearFrom?: string;
+  compatYearTo?: string;
+  weight?: string;
+  dimensions?: string;
+  imageUrl?: string;
+  unitPrice?: string;
+  costPrice?: string;
+  isActive?: boolean;
+  createdAt?: string;
+};
+
+export type PartCategory = {
+  id: string;
+  name: string;
+  description?: string;
+  parentId?: string;
+};
+
+export type Warehouse = {
+  id: string;
+  name: string;
+  address?: string;
+  city?: string;
+  country?: string;
+  isActive?: boolean;
+};
+
+export type InventoryItem = {
+  id: string;
+  partId: string;
+  warehouseId: string;
+  quantityOnHand: number;
+  quantityReserved: number;
+  reorderPoint: number;
+  binLocation?: string;
+};
+
+export type Supplier = {
+  id: string;
+  name: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  website?: string;
+  leadTimeDays?: number;
+  moq?: number;
+  rating?: number;
+  notes?: string;
+  isActive?: boolean;
+};
+
+export type SupplierPart = {
+  id: string;
+  supplierId: string;
+  partId: string;
+  costPrice?: string;
+  leadTimeDays?: number;
+  moq?: number;
+  supplierSku?: string;
+};
+
+export type OrderLine = {
+  id: string;
+  dealId: string;
+  partId: string;
+  quantity: number;
+  unitPrice?: string;
+  discount?: string;
+  lineTotal?: string;
 };
 
 export type Activity = {
@@ -77,14 +207,14 @@ export type Activity = {
   type: "Call" | "Email" | "Meeting" | "Note";
   note: string;
   date: string;
-  createdAt?: string;       // ISO date string
+  createdAt?: string;
 };
 
 export type Message = {
   id: string;
-  leadId: string;
+  leadId?: string;
   dealId?: string;
-  channel: "Email" | "WhatsApp" | "SMS" | "LinkedIn" | "Other";
+  channel: "Email" | "WhatsApp" | "SMS" | "LinkedIn" | "Other" | "Internal";
   direction: "inbound" | "outbound";
   subject?: string;
   body: string;
@@ -154,18 +284,17 @@ const PROTECTED_STATUSES = new Set(["Qualified", "Lost", "Cold"]);
 
 // ── Seed data (used for first-run and reset) ───────────────────────────────────
 
-// u1 = Admin User, u2 = Sales Rep (mirrors DEMO_USERS in AuthContext)
 const seedLeads: Omit<Lead, "id">[] = [
-  { name: "Alice Johnson", email: "alice@acme.com",     phone: "+1 555-0101", status: "Qualified", source: "Website",   lastContact: "Today",      ownerId: "u2" },
-  { name: "Bob Smith",     email: "bob@globex.com",     phone: "+1 555-0102", status: "New",       source: "Referral",  lastContact: "Yesterday",  ownerId: "u2" },
-  { name: "Carol White",   email: "carol@initech.com",  phone: "+1 555-0103", status: "Contacted", source: "LinkedIn",  lastContact: "Mar 18",     ownerId: "u2" },
-  { name: "David Lee",     email: "david@umbrella.com", phone: "+1 555-0104", status: "Lost",      source: "Cold Call", lastContact: "Mar 15",     ownerId: "u1" },
-  { name: "Eva Martinez",  email: "eva@soylent.com",    phone: "+1 555-0105", status: "New",       source: "Website",   lastContact: "Mar 14",     ownerId: "u1" },
-  { name: "Frank Chen",    email: "frank@initech.com",  phone: "+1 555-0106", status: "Qualified", source: "Event",     lastContact: "Mar 12" },
-  { name: "Grace Kim",     email: "grace@acme.com",     phone: "+1 555-0107", status: "Contacted", source: "Referral",  lastContact: "Mar 10" },
-  { name: "Henry Park",    email: "henry@globex.com",   phone: "+1 555-0108", status: "Qualified", source: "LinkedIn",  lastContact: "Mar 8" },
+  { name: "Alice Johnson", email: "alice@acme.com",     phone: "+1 555-0101", status: "Qualified", source: "Website",   lastContact: "Today",      ownerId: "u2", carModel: "BMW X5", carYear: "2024", carPrice: "$62,000", carVin: "WBA5R1C50LAF12345", carCondition: "New" },
+  { name: "Bob Smith",     email: "bob@globex.com",     phone: "+1 555-0102", status: "New",       source: "Referral",  lastContact: "Yesterday",  ownerId: "u2", carModel: "Toyota Camry", carYear: "2023", carPrice: "$28,500", carVin: "4T1BZ1HK5PU123456", carCondition: "Used" },
+  { name: "Carol White",   email: "carol@initech.com",  phone: "+1 555-0103", status: "Contacted", source: "LinkedIn",  lastContact: "Mar 18",     ownerId: "u2", carModel: "Mercedes C300", carYear: "2024", carPrice: "$45,000", carVin: "W1KZF8DB1PA000001", carCondition: "Certified Pre-Owned" },
+  { name: "David Lee",     email: "david@umbrella.com", phone: "+1 555-0104", status: "Lost",      source: "Cold Call", lastContact: "Mar 15",     ownerId: "u1", carModel: "Honda Civic", carYear: "2022", carPrice: "$24,000", carVin: "2HGFC2F69NH500001", carCondition: "Used" },
+  { name: "Eva Martinez",  email: "eva@soylent.com",    phone: "+1 555-0105", status: "New",       source: "Website",   lastContact: "Mar 14",     ownerId: "u1", carModel: "Tesla Model 3", carYear: "2024", carPrice: "$42,990", carVin: "5YJ3E1EA0PF100001", carCondition: "New" },
+  { name: "Frank Chen",    email: "frank@initech.com",  phone: "+1 555-0106", status: "Qualified", source: "Event",     lastContact: "Mar 12", carModel: "Audi A4", carYear: "2023", carPrice: "$39,900", carCondition: "New" },
+  { name: "Grace Kim",     email: "grace@acme.com",     phone: "+1 555-0107", status: "Contacted", source: "Referral",  lastContact: "Mar 10", carModel: "Ford F-150", carYear: "2024", carPrice: "$55,000", carCondition: "New" },
+  { name: "Henry Park",    email: "henry@globex.com",   phone: "+1 555-0108", status: "Qualified", source: "LinkedIn",  lastContact: "Mar 8", carModel: "Chevrolet Tahoe", carYear: "2023", carPrice: "$58,000", carCondition: "Certified Pre-Owned" },
   { name: "Isla Torres",   email: "isla@umbrella.com",  phone: "+1 555-0109", status: "Lost",      source: "Cold Call", lastContact: "Mar 5" },
-  { name: "James Brown",   email: "james@soylent.com",  phone: "+1 555-0110", status: "New",       source: "Website",   lastContact: "Mar 3" },
+  { name: "James Brown",   email: "james@soylent.com",  phone: "+1 555-0110", status: "New",       source: "Website",   lastContact: "Mar 3", carModel: "Porsche Cayenne", carYear: "2024", carPrice: "$82,000", carCondition: "New" },
 ];
 
 const seedTasks: Omit<Task, "id">[] = [
@@ -179,25 +308,25 @@ const seedTasks: Omit<Task, "id">[] = [
 ];
 
 const seedDeals: Omit<Deal, "id">[] = [
-  { name: "Acme Corp Expansion",  contact: "Alice Johnson", value: "$24,000", stage: "Negotiation", close: "Mar 30", owner: "Sales Rep",  ownerId: "u2" },
-  { name: "Globex SaaS License",  contact: "Bob Smith",     value: "$12,500", stage: "Proposal",    close: "Apr 5",  owner: "Sales Rep",  ownerId: "u2" },
-  { name: "Initech Renewal",      contact: "Carol White",   value: "$8,000",  stage: "Qualified",   close: "Apr 12", owner: "Sales Rep",  ownerId: "u2" },
-  { name: "Umbrella Platform",    contact: "David Lee",     value: "$52,000", stage: "Prospecting", close: "Apr 20", owner: "Admin User", ownerId: "u1" },
-  { name: "Soylent Annual Plan",  contact: "Eva Martinez",  value: "$18,000", stage: "Closed Won",  close: "Mar 15", owner: "Admin User", ownerId: "u1" },
-  { name: "Initech Add-on",       contact: "Frank Chen",    value: "$3,500",  stage: "Proposal",    close: "Apr 8" },
-  { name: "Acme Pro Upgrade",     contact: "Grace Kim",     value: "$9,000",  stage: "Qualified",   close: "Apr 18" },
-  { name: "Globex Enterprise",    contact: "Henry Park",    value: "$67,000", stage: "Negotiation", close: "Apr 2" },
+  { name: "BMW X5 Sale",           contact: "Alice Johnson", value: "$62,000", stage: "Negotiation", close: "Mar 30", owner: "Sales Rep",  ownerId: "u2", carModel: "BMW X5", carYear: "2024", carPrice: "$62,000", carCondition: "New" },
+  { name: "Toyota Camry Trade-in", contact: "Bob Smith",     value: "$28,500", stage: "Proposal",    close: "Apr 5",  owner: "Sales Rep",  ownerId: "u2", carModel: "Toyota Camry", carYear: "2023", carPrice: "$28,500", carCondition: "Used" },
+  { name: "Mercedes CPO Deal",     contact: "Carol White",   value: "$45,000", stage: "Qualified",   close: "Apr 12", owner: "Sales Rep",  ownerId: "u2", carModel: "Mercedes C300", carYear: "2024", carPrice: "$45,000", carCondition: "Certified Pre-Owned" },
+  { name: "Tesla Model 3 Order",   contact: "Eva Martinez",  value: "$42,990", stage: "Prospecting", close: "Apr 20", owner: "Admin User", ownerId: "u1", carModel: "Tesla Model 3", carYear: "2024", carPrice: "$42,990", carCondition: "New" },
+  { name: "Porsche Cayenne Sale",  contact: "James Brown",   value: "$82,000", stage: "Closed Won",  close: "Mar 15", owner: "Admin User", ownerId: "u1", carModel: "Porsche Cayenne", carYear: "2024", carPrice: "$82,000", carCondition: "New" },
+  { name: "Audi A4 Lease",         contact: "Frank Chen",    value: "$39,900", stage: "Proposal",    close: "Apr 8", carModel: "Audi A4", carYear: "2023", carPrice: "$39,900", carCondition: "New" },
+  { name: "Ford F-150 Sale",       contact: "Grace Kim",     value: "$55,000", stage: "Qualified",   close: "Apr 18", carModel: "Ford F-150", carYear: "2024", carPrice: "$55,000", carCondition: "New" },
+  { name: "Chevrolet Tahoe CPO",   contact: "Henry Park",    value: "$58,000", stage: "Negotiation", close: "Apr 2", carModel: "Chevrolet Tahoe", carYear: "2023", carPrice: "$58,000", carCondition: "Certified Pre-Owned" },
 ];
 
 const seedCompanies: Omit<Company, "id">[] = [
-  { name: "Acme Corp",      industry: "Technology",      contacts: 4, revenue: "$33,000", status: "Active",  website: "acme.com",          phone: "+1 555-1001" },
-  { name: "Globex Inc",     industry: "Finance",         contacts: 3, revenue: "$79,500", status: "Active",  website: "globex.com",        phone: "+1 555-1002" },
-  { name: "Initech",        industry: "Software",        contacts: 2, revenue: "$11,500", status: "Active",  website: "initech.com",       phone: "+1 555-1003" },
-  { name: "Umbrella Ltd",   industry: "Healthcare",      contacts: 2, revenue: "$57,500", status: "At Risk", website: "umbrella.com",      phone: "+1 555-1004" },
-  { name: "Soylent Co",     industry: "Food & Beverage", contacts: 2, revenue: "$25,200", status: "Active",  website: "soylent.com",       phone: "+1 555-1005" },
-  { name: "Hooli",          industry: "Technology",      contacts: 1, revenue: "$14,000", status: "Lead",    website: "hooli.com",         phone: "+1 555-1006" },
-  { name: "Pied Piper",     industry: "Software",        contacts: 1, revenue: "$6,800",  status: "Lead",    website: "piedpiper.com",     phone: "+1 555-1007" },
-  { name: "Dunder Mifflin", industry: "Retail",          contacts: 3, revenue: "$9,300",  status: "Churned", website: "dundermifflin.com", phone: "+1 555-1008" },
+  { name: "Acme Motors",       industry: "Auto Dealership",  contacts: 4, revenue: "$117,000", status: "Active",  website: "acmemotors.com",      phone: "+1 555-1001" },
+  { name: "Globex Auto Group", industry: "Auto Dealership",  contacts: 3, revenue: "$86,500",  status: "Active",  website: "globexauto.com",      phone: "+1 555-1002" },
+  { name: "Initech Leasing",   industry: "Auto Finance",     contacts: 2, revenue: "$84,900",  status: "Active",  website: "initechleasing.com",  phone: "+1 555-1003" },
+  { name: "Umbrella Fleet",    industry: "Fleet Management", contacts: 2, revenue: "$66,990",  status: "At Risk", website: "umbrellafleet.com",   phone: "+1 555-1004" },
+  { name: "Soylent Transport", industry: "Logistics",        contacts: 2, revenue: "$42,990",  status: "Active",  website: "soylenttrans.com",    phone: "+1 555-1005" },
+  { name: "Hooli Cars",        industry: "Auto Marketplace", contacts: 1, revenue: "$14,000",  status: "Lead",    website: "hoolicars.com",       phone: "+1 555-1006" },
+  { name: "Pied Piper Auto",   industry: "Auto Tech",        contacts: 1, revenue: "$6,800",   status: "Lead",    website: "piedpiperauto.com",   phone: "+1 555-1007" },
+  { name: "Dunder Auto Parts", industry: "Parts & Service",  contacts: 3, revenue: "$9,300",   status: "Churned", website: "dunderautoparts.com", phone: "+1 555-1008" },
 ];
 
 // ── Context type ───────────────────────────────────────────────────────────────
@@ -210,13 +339,13 @@ type AppContextType = {
   activities: Activity[];
   messages: Message[];
   loaded: boolean;
-  // Unfiltered data for admin dashboards
   allLeads: Lead[];
   allTasks: Task[];
   allDeals: Deal[];
   addLead: (lead: Omit<Lead, "id">) => void;
   updateLead: (id: string, updates: Partial<Lead>) => void;
   deleteLead: (id: string) => void;
+  bulkDeleteLeads: (ids: string[]) => void;
   addTask: (task: Omit<Task, "id" | "auto">) => void;
   toggleTask: (id: string) => void;
   addDeal: (deal: Omit<Deal, "id">) => void;
@@ -225,6 +354,7 @@ type AppContextType = {
   addCompany: (company: Omit<Company, "id">) => void;
   updateCompany: (id: string, updates: Partial<Company>) => void;
   deleteCompany: (id: string) => void;
+  bulkDeleteCompanies: (ids: string[]) => void;
   addActivity: (activity: Omit<Activity, "id">) => void;
   addMessage: (message: Omit<Message, "id">) => void;
   deleteMessage: (id: string) => void;
@@ -239,7 +369,7 @@ const AppContext = createContext<AppContextType | null>(null);
 // ── Provider ───────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canAccessOwnerId } = useAuth();
   const [leads,      setLeads]      = useState<Lead[]>([]);
   const [tasks,      setTasks]      = useState<Task[]>([]);
   const [deals,      setDeals]      = useState<Deal[]>([]);
@@ -253,13 +383,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async function load() {
       let data = await dbGetAll();
 
-      // First-run: DB is empty → write seed data then reload
       if (data.leads.length === 0) {
         await dbReset({ leads: seedLeads, tasks: seedTasks, deals: seedDeals, companies: seedCompanies });
         data = await dbGetAll();
       }
 
-      // Apply Cold rule + nextAction for leads loaded from DB
       const processedLeads = data.leads.map((lead) => {
         let status = lead.status;
         if (!PROTECTED_STATUSES.has(status) && lead.lastContactAt && daysSince(lead.lastContactAt) >= 7) {
@@ -284,7 +412,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── addLead ────────────────────────────────────────────────────────────────
   function addLead(lead: Omit<Lead, "id">) {
     const now     = new Date().toISOString();
-    const ownerId = user?.id;
+    const ownerId = lead.ownerId ?? user?.id;
     const taskData: Omit<Task, "id"> = {
       title: `Contact lead: ${lead.name}`,
       leadName: lead.name,
@@ -294,7 +422,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       auto: true,
       ownerId,
     };
-    // Optimistic update with a temp ID — replaced by real ID after DB write
     const tempId   = `temp-${Date.now()}`;
     const tempTask = `auto-${tempId}`;
     setLeads((prev) => [{ ...lead, id: tempId, lastContactAt: now, ownerId }, ...prev]);
@@ -326,6 +453,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dbDeleteLead(id);
   }
 
+  function bulkDeleteLeads(ids: string[]) {
+    setLeads((prev) => prev.filter((l) => !ids.includes(l.id)));
+    dbBulkDeleteLeads(ids);
+  }
+
   // ── addActivity ────────────────────────────────────────────────────────────
   function addActivity(activity: Omit<Activity, "id">) {
     const tempId     = `temp-${Date.now()}`;
@@ -353,13 +485,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       lastContactAt: new Date().toISOString(), summary, nextAction,
     };
 
-    // ── 1. Optimistic updates ───────────────────────────────────────────────
     setActivities((prev) => [newActivity, ...prev]);
     setLeads((prev) => prev.map((l) =>
       l.id !== activity.leadId ? l : { ...l, ...leadUpdates }
     ));
 
-    // ── 2. Follow-up task (duplicate check against current state) ──────────
     let followUpTaskData: Omit<Task, "id"> | undefined;
     const alreadyPending = tasks.some((t) => t.title === followUpTitle && !t.done);
     if (!alreadyPending) {
@@ -371,11 +501,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const tempTaskId = `followup-temp-${Date.now()}`;
       setTasks((prev) => [{ ...followUpTaskData!, id: tempTaskId }, ...prev]);
 
-      // ── 3. Persist to DB, replace temp IDs with real ones ───────────────
       dbCreateActivity(activity, leadUpdates, followUpTaskData).then(({ activity: created, task }) => {
         setActivities((prev) => prev.map((a) => (a.id === tempId ? created : a)));
         if (task) setTasks((prev) => prev.map((t) => (t.id === tempTaskId ? task : t)));
-        // Fire-and-forget: enhance with AI (replaces rule-based summary/nextAction)
         aiSummarizeLead(activity.leadId);
       });
     } else {
@@ -408,7 +536,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── Deals ──────────────────────────────────────────────────────────────────
   function addDeal(deal: Omit<Deal, "id">) {
     const tempId  = `temp-${Date.now()}`;
-    const ownerId = user?.id;
+    const ownerId = deal.ownerId ?? user?.id;
     const dealWithOwner = { ...deal, ownerId, owner: deal.owner ?? user?.name };
     setDeals((prev) => [{ ...dealWithOwner, id: tempId, updatedAt: new Date().toISOString() }, ...prev]);
     dbCreateDeal(dealWithOwner).then((created) => {
@@ -459,21 +587,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dbDeleteCompany(id);
   }
 
+  function bulkDeleteCompanies(ids: string[]) {
+    setCompanies((prev) => prev.filter((c) => !ids.includes(c.id)));
+    dbBulkDeleteCompanies(ids);
+  }
+
   // ── Messages ─────────────────────────────────────────────────────────────
   function addMessage(message: Omit<Message, "id">) {
     const tempId = `temp-${Date.now()}`;
     setMessages((prev) => [{ ...message, id: tempId }, ...prev]);
 
-    // Also auto-create an activity for the timeline
-    const channelLabel = message.direction === "inbound" ? `${message.channel} received` : `${message.channel} sent`;
-    const snippet = message.body.length > 80 ? message.body.slice(0, 77) + "..." : message.body;
-    const activityData: Omit<Activity, "id"> = {
-      leadId: message.leadId,
-      type: message.channel === "Email" ? "Email" : "Note",
-      note: `[${channelLabel}] ${message.subject ? message.subject + " — " : ""}${snippet}`,
-      date: message.date,
-    };
-    addActivity(activityData);
+    // Skip auto-activity for internal chat messages or messages without a leadId
+    if (message.channel !== "Internal" && message.leadId) {
+      const channelLabel = message.direction === "inbound" ? `${message.channel} received` : `${message.channel} sent`;
+      const snippet = message.body.length > 80 ? message.body.slice(0, 77) + "..." : message.body;
+      const activityData: Omit<Activity, "id"> = {
+        leadId: message.leadId,
+        type: message.channel === "Email" ? "Email" : "Note",
+        note: `[${channelLabel}] ${message.subject ? message.subject + " — " : ""}${snippet}`,
+        date: message.date,
+      };
+      addActivity(activityData);
+    }
 
     dbCreateMessage(message).then((created) => {
       setMessages((prev) => prev.map((m) => (m.id === tempId ? created : m)));
@@ -533,26 +668,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
   }
 
-  // Sales users see only their own records + unassigned ones
-  const visibleLeads = isAdmin
-    ? leads
-    : leads.filter((l) => !l.ownerId || l.ownerId === user?.id);
-  const visibleTasks = isAdmin
-    ? tasks
-    : tasks.filter((t) => !t.ownerId || t.ownerId === user?.id);
-  const visibleDeals = isAdmin
-    ? deals
-    : deals.filter((d) => !d.ownerId || d.ownerId === user?.id);
+  const visibleLeads = leads.filter((l) => canAccessOwnerId(l.ownerId));
+  const visibleTasks = tasks.filter((t) => canAccessOwnerId(t.ownerId));
+  const visibleDeals = deals.filter((d) => canAccessOwnerId(d.ownerId));
 
   return (
     <AppContext.Provider value={{
       leads: visibleLeads, tasks: visibleTasks, deals: visibleDeals,
       allLeads: leads, allTasks: tasks, allDeals: deals,
       companies, activities, messages, loaded,
-      addLead, updateLead, deleteLead,
+      addLead, updateLead, deleteLead, bulkDeleteLeads,
       addTask, toggleTask,
       addDeal, updateDeal, deleteDeal,
-      addCompany, updateCompany, deleteCompany,
+      addCompany, updateCompany, deleteCompany, bulkDeleteCompanies,
       addActivity,
       addMessage, deleteMessage,
       aiSummarizeLead, aiConversation, aiFollowUp,

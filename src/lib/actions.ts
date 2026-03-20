@@ -11,7 +11,15 @@ function mapLead(r: {
   source: string; lastContact: string; lastContactAt: Date | null;
   summary: string | null; nextAction: string | null;
   convSummary?: string | null; followUpDraft?: string | null;
-  ownerId?: string | null; createdAt: Date; [k: string]: unknown;
+  ownerId?: string | null; createdAt: Date;
+  carModel?: string | null; carYear?: string | null; carPrice?: string | null;
+  carVin?: string | null; carCondition?: string | null;
+  customerType?: string | null; taxId?: string | null;
+  shippingAddress?: string | null; billingAddress?: string | null;
+  paymentTerms?: string | null;
+  companyName?: string | null; country?: string | null;
+  preferredBrands?: string | null; customerNotes?: string | null;
+  [k: string]: unknown;
 }): Lead {
   return {
     id: r.id, name: r.name, email: r.email, phone: r.phone,
@@ -23,18 +31,35 @@ function mapLead(r: {
     followUpDraft: r.followUpDraft ?? undefined,
     ownerId: r.ownerId ?? undefined,
     createdAt: r.createdAt.toISOString(),
+    carModel: r.carModel ?? undefined,
+    carYear: r.carYear ?? undefined,
+    carPrice: r.carPrice ?? undefined,
+    carVin: r.carVin ?? undefined,
+    carCondition: r.carCondition ?? undefined,
+    customerType: r.customerType ?? undefined,
+    taxId: r.taxId ?? undefined,
+    shippingAddress: r.shippingAddress ?? undefined,
+    billingAddress: r.billingAddress ?? undefined,
+    paymentTerms: r.paymentTerms ?? undefined,
+    companyName: r.companyName ?? undefined,
+    country: r.country ?? undefined,
+    preferredBrands: r.preferredBrands ?? undefined,
+    customerNotes: r.customerNotes ?? undefined,
   };
 }
 
 function mapTask(r: {
   id: string; title: string; leadName: string; due: string;
   priority: string; done: boolean; auto: boolean; ownerId?: string | null;
+  orderId?: string | null; supplierId?: string | null;
   [k: string]: unknown;
 }): Task {
   return {
     id: r.id, title: r.title, leadName: r.leadName,
     due: r.due, priority: r.priority, done: r.done, auto: r.auto,
     ownerId: r.ownerId ?? undefined,
+    orderId: r.orderId ?? undefined,
+    supplierId: r.supplierId ?? undefined,
   };
 }
 
@@ -42,7 +67,17 @@ function mapDeal(r: {
   id: string; name: string; contact: string; value: string; stage: string;
   close: string | null; leadId: string | null; leadName: string | null;
   owner: string | null; ownerId?: string | null; won: boolean; lost: boolean;
-  createdAt: Date; updatedAt: Date; [k: string]: unknown;
+  createdAt: Date; updatedAt: Date;
+  carModel?: string | null; carYear?: string | null; carPrice?: string | null;
+  carVin?: string | null; carCondition?: string | null;
+  orderNumber?: string | null; orderStatus?: string | null;
+  shippingMethod?: string | null; shippingCost?: string | null;
+  taxAmount?: string | null; subtotal?: string | null;
+  grandTotal?: string | null; notes?: string | null;
+  isQuote?: boolean; quoteNumber?: string | null;
+  quoteStatus?: string | null; validUntil?: string | null;
+  convertedToOrderId?: string | null;
+  [k: string]: unknown;
 }): Deal {
   return {
     id: r.id, name: r.name, contact: r.contact, value: r.value,
@@ -52,6 +87,24 @@ function mapDeal(r: {
     won: r.won, lost: r.lost,
     createdDate: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
+    carModel: r.carModel ?? undefined,
+    carYear: r.carYear ?? undefined,
+    carPrice: r.carPrice ?? undefined,
+    carVin: r.carVin ?? undefined,
+    carCondition: r.carCondition ?? undefined,
+    orderNumber: r.orderNumber ?? undefined,
+    orderStatus: r.orderStatus ?? undefined,
+    shippingMethod: r.shippingMethod ?? undefined,
+    shippingCost: r.shippingCost ?? undefined,
+    taxAmount: r.taxAmount ?? undefined,
+    subtotal: r.subtotal ?? undefined,
+    grandTotal: r.grandTotal ?? undefined,
+    notes: r.notes ?? undefined,
+    isQuote: r.isQuote ?? false,
+    quoteNumber: r.quoteNumber ?? undefined,
+    quoteStatus: r.quoteStatus ?? undefined,
+    validUntil: r.validUntil ?? undefined,
+    convertedToOrderId: r.convertedToOrderId ?? undefined,
   };
 }
 
@@ -68,12 +121,12 @@ function mapActivity(r: {
 }
 
 function mapMessage(r: {
-  id: string; leadId: string; dealId: string | null; channel: string;
+  id: string; leadId: string | null; dealId: string | null; channel: string;
   direction: string; subject: string | null; body: string;
   sender: string; recipient: string; date: string;
 }): Message {
   return {
-    id: r.id, leadId: r.leadId,
+    id: r.id, leadId: r.leadId ?? undefined,
     dealId: r.dealId ?? undefined,
     channel: r.channel as Message["channel"],
     direction: r.direction as Message["direction"],
@@ -86,11 +139,18 @@ function mapMessage(r: {
 function mapCompany(r: {
   id: string; name: string; industry: string; contacts: number;
   revenue: string; status: string; website: string | null; phone: string | null;
+  country?: string | null; taxId?: string | null; paymentTerms?: string | null;
+  isSupplier?: boolean; isCustomer?: boolean;
+  [k: string]: unknown;
 }): Company {
   return {
     id: r.id, name: r.name, industry: r.industry, contacts: r.contacts,
     revenue: r.revenue, status: r.status,
     website: r.website ?? undefined, phone: r.phone ?? undefined,
+    country: r.country ?? undefined, taxId: r.taxId ?? undefined,
+    paymentTerms: r.paymentTerms ?? undefined,
+    isSupplier: r.isSupplier ?? false,
+    isCustomer: r.isCustomer ?? false,
   };
 }
 
@@ -133,6 +193,13 @@ export async function dbCreateLead(
         lastContactAt: data.lastContactAt ? new Date(data.lastContactAt) : null,
         summary: data.summary, nextAction: data.nextAction,
         ownerId: data.ownerId,
+        carModel: data.carModel, carYear: data.carYear, carPrice: data.carPrice,
+        carVin: data.carVin, carCondition: data.carCondition,
+        customerType: data.customerType, companyName: data.companyName,
+        country: data.country, preferredBrands: data.preferredBrands,
+        taxId: data.taxId, shippingAddress: data.shippingAddress,
+        billingAddress: data.billingAddress, paymentTerms: data.paymentTerms,
+        customerNotes: data.customerNotes,
       },
     }),
     prisma.task.create({
@@ -161,6 +228,20 @@ export async function dbUpdateLead(id: string, updates: Partial<Lead>): Promise<
       ...(updates.summary     !== undefined && { summary: updates.summary }),
       ...(updates.nextAction  !== undefined && { nextAction: updates.nextAction }),
       ...(updates.ownerId     !== undefined && { ownerId: updates.ownerId }),
+      ...(updates.carModel    !== undefined && { carModel: updates.carModel }),
+      ...(updates.carYear     !== undefined && { carYear: updates.carYear }),
+      ...(updates.carPrice    !== undefined && { carPrice: updates.carPrice }),
+      ...(updates.carVin      !== undefined && { carVin: updates.carVin }),
+      ...(updates.carCondition !== undefined && { carCondition: updates.carCondition }),
+      ...(updates.customerType !== undefined && { customerType: updates.customerType }),
+      ...(updates.companyName  !== undefined && { companyName: updates.companyName }),
+      ...(updates.country      !== undefined && { country: updates.country }),
+      ...(updates.preferredBrands !== undefined && { preferredBrands: updates.preferredBrands }),
+      ...(updates.taxId        !== undefined && { taxId: updates.taxId }),
+      ...(updates.shippingAddress !== undefined && { shippingAddress: updates.shippingAddress }),
+      ...(updates.billingAddress !== undefined && { billingAddress: updates.billingAddress }),
+      ...(updates.paymentTerms !== undefined && { paymentTerms: updates.paymentTerms }),
+      ...(updates.customerNotes !== undefined && { customerNotes: updates.customerNotes }),
     },
   });
   return mapLead(row);
@@ -168,6 +249,10 @@ export async function dbUpdateLead(id: string, updates: Partial<Lead>): Promise<
 
 export async function dbDeleteLead(id: string): Promise<void> {
   await prisma.lead.delete({ where: { id } });
+}
+
+export async function dbBulkDeleteLeads(ids: string[]): Promise<void> {
+  await prisma.lead.deleteMany({ where: { id: { in: ids } } });
 }
 
 // ── TASKS ─────────────────────────────────────────────────────────────────────
@@ -192,6 +277,34 @@ export async function dbToggleTask(id: string, done: boolean): Promise<Task> {
 // ── DEALS ─────────────────────────────────────────────────────────────────────
 
 export async function dbCreateDeal(data: Omit<Deal, "id">): Promise<Deal> {
+  const isQuote = data.isQuote ?? false;
+
+  // Auto-generate order number or quote number
+  let orderNumber: string | undefined = undefined;
+  let quoteNumber: string | undefined = undefined;
+
+  if (isQuote) {
+    const lastQ = await prisma.deal.findFirst({
+      where: { quoteNumber: { not: null } },
+      orderBy: { quoteNumber: "desc" },
+      select: { quoteNumber: true },
+    });
+    const nextQ = lastQ?.quoteNumber
+      ? parseInt(lastQ.quoteNumber.replace("QUO-", "")) + 1
+      : 1;
+    quoteNumber = `QUO-${String(nextQ).padStart(4, "0")}`;
+  } else {
+    const last = await prisma.deal.findFirst({
+      where: { orderNumber: { not: null } },
+      orderBy: { orderNumber: "desc" },
+      select: { orderNumber: true },
+    });
+    const nextNum = last?.orderNumber
+      ? parseInt(last.orderNumber.replace("ORD-", "")) + 1
+      : 1;
+    orderNumber = `ORD-${String(nextNum).padStart(4, "0")}`;
+  }
+
   const row = await prisma.deal.create({
     data: {
       name: data.name, contact: data.contact, value: data.value,
@@ -199,6 +312,21 @@ export async function dbCreateDeal(data: Omit<Deal, "id">): Promise<Deal> {
       leadId: data.leadId, leadName: data.leadName,
       owner: data.owner, ownerId: data.ownerId,
       won: data.won ?? false, lost: data.lost ?? false,
+      carModel: data.carModel, carYear: data.carYear, carPrice: data.carPrice,
+      carVin: data.carVin, carCondition: data.carCondition,
+      orderNumber: orderNumber ?? null,
+      orderStatus: isQuote ? null : (data.orderStatus || "New"),
+      shippingMethod: data.shippingMethod,
+      shippingCost: data.shippingCost,
+      taxAmount: data.taxAmount,
+      subtotal: data.subtotal,
+      grandTotal: data.grandTotal,
+      notes: data.notes,
+      isQuote,
+      quoteNumber: quoteNumber ?? null,
+      quoteStatus: isQuote ? (data.quoteStatus || "Draft") : null,
+      validUntil: data.validUntil ?? null,
+      convertedToOrderId: data.convertedToOrderId ?? null,
     },
   });
   return mapDeal(row);
@@ -217,6 +345,24 @@ export async function dbUpdateDeal(id: string, updates: Partial<Deal>): Promise<
       ...(updates.ownerId  !== undefined && { ownerId: updates.ownerId }),
       ...(updates.won      !== undefined && { won: updates.won }),
       ...(updates.lost     !== undefined && { lost: updates.lost }),
+      ...(updates.carModel !== undefined && { carModel: updates.carModel }),
+      ...(updates.carYear  !== undefined && { carYear: updates.carYear }),
+      ...(updates.carPrice !== undefined && { carPrice: updates.carPrice }),
+      ...(updates.carVin   !== undefined && { carVin: updates.carVin }),
+      ...(updates.carCondition !== undefined && { carCondition: updates.carCondition }),
+      ...(updates.orderNumber !== undefined && { orderNumber: updates.orderNumber }),
+      ...(updates.orderStatus !== undefined && { orderStatus: updates.orderStatus }),
+      ...(updates.shippingMethod !== undefined && { shippingMethod: updates.shippingMethod }),
+      ...(updates.shippingCost !== undefined && { shippingCost: updates.shippingCost }),
+      ...(updates.taxAmount !== undefined && { taxAmount: updates.taxAmount }),
+      ...(updates.subtotal !== undefined && { subtotal: updates.subtotal }),
+      ...(updates.grandTotal !== undefined && { grandTotal: updates.grandTotal }),
+      ...(updates.notes !== undefined && { notes: updates.notes }),
+      ...(updates.isQuote !== undefined && { isQuote: updates.isQuote }),
+      ...(updates.quoteNumber !== undefined && { quoteNumber: updates.quoteNumber }),
+      ...(updates.quoteStatus !== undefined && { quoteStatus: updates.quoteStatus }),
+      ...(updates.validUntil !== undefined && { validUntil: updates.validUntil }),
+      ...(updates.convertedToOrderId !== undefined && { convertedToOrderId: updates.convertedToOrderId }),
     },
   });
   return mapDeal(row);
@@ -224,6 +370,37 @@ export async function dbUpdateDeal(id: string, updates: Partial<Deal>): Promise<
 
 export async function dbDeleteDeal(id: string): Promise<void> {
   await prisma.deal.delete({ where: { id } });
+}
+
+export async function dbReserveStockForOrder(
+  dealId: string
+): Promise<{ reserved: number; failed: number }> {
+  const lines = await prisma.orderLine.findMany({ where: { dealId } });
+  let reserved = 0;
+  let failed = 0;
+
+  for (const line of lines) {
+    const inventoryRecords = await prisma.inventory.findMany({
+      where: { partId: line.partId },
+      orderBy: { quantityOnHand: "desc" },
+    });
+    let remaining = line.quantity;
+    for (const inv of inventoryRecords) {
+      if (remaining <= 0) break;
+      const available = inv.quantityOnHand - inv.quantityReserved;
+      if (available <= 0) continue;
+      const toReserve = Math.min(remaining, available);
+      await prisma.inventory.update({
+        where: { id: inv.id },
+        data: { quantityReserved: inv.quantityReserved + toReserve },
+      });
+      remaining -= toReserve;
+    }
+    if (remaining <= 0) reserved++;
+    else failed++;
+  }
+
+  return { reserved, failed };
 }
 
 // ── ACTIVITIES ────────────────────────────────────────────────────────────────
@@ -289,6 +466,10 @@ export async function dbDeleteCompany(id: string): Promise<void> {
   await prisma.company.delete({ where: { id } });
 }
 
+export async function dbBulkDeleteCompanies(ids: string[]): Promise<void> {
+  await prisma.company.deleteMany({ where: { id: { in: ids } } });
+}
+
 // ── MESSAGES ─────────────────────────────────────────────────────────────────
 
 export async function dbCreateMessage(data: Omit<Message, "id">): Promise<Message> {
@@ -314,6 +495,15 @@ export async function dbReset(seed: {
   deals: Omit<Deal, "id">[]; companies: Omit<Company, "id">[];
 }): Promise<void> {
   await prisma.$transaction([
+    // Spare-parts tables first (FK deps)
+    prisma.orderLine.deleteMany(),
+    prisma.supplierPart.deleteMany(),
+    prisma.inventory.deleteMany(),
+    prisma.warehouse.deleteMany(),
+    prisma.part.deleteMany(),
+    prisma.category.deleteMany(),
+    prisma.supplier.deleteMany(),
+    // Original tables
     prisma.message.deleteMany(),
     prisma.activity.deleteMany(),
     prisma.task.deleteMany(),
@@ -327,6 +517,13 @@ export async function dbReset(seed: {
       source: l.source, lastContact: l.lastContact,
       lastContactAt: l.lastContactAt ? new Date(l.lastContactAt) : null,
       summary: l.summary, nextAction: l.nextAction, ownerId: l.ownerId,
+      carModel: l.carModel, carYear: l.carYear, carPrice: l.carPrice,
+      carVin: l.carVin, carCondition: l.carCondition,
+      customerType: l.customerType, companyName: l.companyName,
+      country: l.country, preferredBrands: l.preferredBrands,
+      taxId: l.taxId, shippingAddress: l.shippingAddress,
+      billingAddress: l.billingAddress, paymentTerms: l.paymentTerms,
+      customerNotes: l.customerNotes,
     })) }),
     prisma.task.createMany({ data: seed.tasks.map((t) => ({
       title: t.title, leadName: t.leadName, due: t.due,
@@ -336,6 +533,8 @@ export async function dbReset(seed: {
       name: d.name, contact: d.contact, value: d.value, stage: d.stage,
       close: d.close || null, leadName: d.leadName, owner: d.owner,
       ownerId: d.ownerId, won: d.won ?? false, lost: d.lost ?? false,
+      carModel: d.carModel, carYear: d.carYear, carPrice: d.carPrice,
+      carVin: d.carVin, carCondition: d.carCondition,
     })) }),
     prisma.company.createMany({ data: seed.companies.map((c) => ({
       name: c.name, industry: c.industry, contacts: c.contacts,

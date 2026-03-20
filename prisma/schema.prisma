@@ -22,6 +22,22 @@ model Lead {
   convSummary   String?                      // AI summary of pasted conversation text
   followUpDraft String?                      // AI-suggested follow-up message
   ownerId       String?                      // auth user id; null = unassigned (visible to all)
+  // Car industry fields
+  carModel      String?
+  carYear       String?
+  carPrice      String?
+  carVin        String?
+  carCondition  String?                      // "New" | "Used" | "Certified Pre-Owned"
+  // Spare-parts customer fields (Phase 1 + Phase 5)
+  customerType    String?                    // "individual" | "workshop" | "dealer" | "distributor"
+  taxId           String?
+  shippingAddress String?
+  billingAddress  String?
+  paymentTerms    String?                    // "net30" | "net60" | "cod" | "prepaid"
+  companyName     String?                    // customer's company name
+  country         String?
+  preferredBrands String?                    // comma-separated brand list
+  customerNotes   String?                    // internal notes about this customer
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -41,6 +57,9 @@ model Task {
   done      Boolean  @default(false)
   auto      Boolean  @default(false)         // true = system-generated
   ownerId   String?                          // auth user id; null = unassigned
+  // Spare-parts links (Phase 1)
+  orderId    String?                         // optional link to a Deal/Order
+  supplierId String?                         // optional link to a Supplier
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -60,6 +79,28 @@ model Deal {
   ownerId   String?                          // auth user id; null = unassigned
   won       Boolean   @default(false)
   lost      Boolean   @default(false)
+  // Car industry fields
+  carModel     String?
+  carYear      String?
+  carPrice     String?
+  carVin       String?
+  carCondition String?                       // "New" | "Used" | "Certified Pre-Owned"
+  // Spare-parts order fields (Phase 1)
+  orderNumber    String?   @unique           // auto-generated order number e.g. "ORD-0001"
+  orderStatus    String?                     // "draft" | "confirmed" | "shipped" | "delivered" | "invoiced"
+  shippingMethod String?
+  shippingCost   String?                     // stored as display string like "$12.50"
+  taxAmount      String?
+  subtotal       String?
+  grandTotal     String?
+  notes          String?
+  // RFQ / Quote fields
+  isQuote        Boolean   @default(false)       // true = quote, false = order
+  quoteNumber    String?   @unique               // auto-generated e.g. "QUO-0001"
+  quoteStatus    String?                          // "Draft" | "Sent" | "Accepted" | "Rejected" | "Expired"
+  validUntil     String?                          // validity date ISO string
+  convertedToOrderId String?                      // deal id of the order this quote was converted to
+  orderLines     OrderLine[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
@@ -78,8 +119,8 @@ model Activity {
 // ── Message (communication record) ───────────────────────────────────────────
 model Message {
   id        String   @id @default(cuid())
-  leadId    String
-  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
   dealId    String?                          // optional link to a deal
   channel   String                           // "Email" | "WhatsApp" | "SMS" | "LinkedIn" | "Other"
   direction String                           // "inbound" | "outbound"
@@ -101,6 +142,183 @@ model Company {
   status    String
   website   String?
   phone     String?
+  // Spare-parts flags (Phase 1)
+  country      String?
+  taxId        String?
+  paymentTerms String?                       // "net30" | "net60" | "cod" | "prepaid"
+  isSupplier   Boolean  @default(false)
+  isCustomer   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ── Part (Spare Parts Catalog) ──────────────────────────────────────────────
+model Part {
+  id              String   @id @default(cuid())
+  sku             String   @unique
+  name            String
+  description     String?
+  oemNumber       String?                    // original equipment manufacturer number
+  brand           String?
+  categoryId      String?
+  category        Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  compatMake      String?                    // e.g. "Toyota"
+  compatModel     String?                    // e.g. "Camry"
+  compatYearFrom  String?                    // e.g. "2018"
+  compatYearTo    String?                    // e.g. "2024"
+  weight          String?                    // e.g. "2.5 kg"
+  dimensions      String?                    // e.g. "30x20x10 cm"
+  imageUrl        String?
+  unitPrice       String?                    // display string e.g. "$45.00"
+  costPrice       String?                    // display string e.g. "$25.00"
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  inventoryItems  Inventory[]
+  orderLines      OrderLine[]
+  supplierParts   SupplierPart[]
+}
+
+// ── Category (Part categories, supports nesting) ────────────────────────────
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  parentId    String?
+  parent      Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[] @relation("CategoryTree")
+  parts       Part[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+// ── Warehouse ────────────────────────────────────────────────────────────────
+model Warehouse {
+  id        String      @id @default(cuid())
+  name      String
+  address   String?
+  city      String?
+  country   String?
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  inventory Inventory[]
+}
+
+// ── Inventory (stock per part per warehouse) ─────────────────────────────────
+model Inventory {
+  id               String    @id @default(cuid())
+  partId           String
+  part             Part      @relation(fields: [partId], references: [id], onDelete: Cascade)
+  warehouseId      String
+  warehouse        Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  quantityOnHand   Int       @default(0)
+  quantityReserved Int       @default(0)
+  reorderPoint     Int       @default(0)
+  binLocation      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([partId, warehouseId])
+}
+
+// ── Supplier ─────────────────────────────────────────────────────────────────
+model Supplier {
+  id           String   @id @default(cuid())
+  name         String
+  contactName  String?
+  email        String?
+  phone        String?
+  country      String?
+  website      String?
+  leadTimeDays Int?
+  moq          Int?                          // minimum order quantity
+  rating       Int?                          // 1-5 stars
+  notes        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  supplierParts SupplierPart[]
+}
+
+// ── SupplierPart (which supplier sells which part at what cost) ──────────────
+model SupplierPart {
+  id           String   @id @default(cuid())
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  partId       String
+  part         Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
+  costPrice    String?                       // supplier's cost for this part
+  leadTimeDays Int?
+  moq          Int?
+  supplierSku  String?                       // supplier's own SKU for this part
+  createdAt    DateTime @default(now())
+
+  @@unique([supplierId, partId])
+}
+
+// ── OrderLine (line items on a Deal/Order) ───────────────────────────────────
+model OrderLine {
+  id        String   @id @default(cuid())
+  dealId    String
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  partId    String
+  part      Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(1)
+  unitPrice String?                          // price per unit at time of order
+  discount  String?                          // discount amount or percentage
+  lineTotal String?                          // calculated total for this line
+  createdAt DateTime @default(now())
+}
+
+// ── Chat Conversation (internal employee chat) ──────────────────────────────
+model ChatConversation {
+  id        String   @id @default(cuid())
+  type      String                              // "direct" | "group"
+  name      String?                             // null for DMs, group name for groups
+  createdBy String                              // userId who created it
+  members   String                              // JSON array of userIds e.g. '["u1","u2"]'
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  messages  ChatMessage[]
+}
+
+// ── Chat Message ────────────────────────────────────────────────────────────
+model ChatMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String                         // userId
+  senderName     String                         // denormalized for display
+  senderRole     String                         // denormalized e.g. "admin"
+  body           String
+  readBy         String   @default("[]")        // JSON array of userIds who read it
+  // File attachment (optional, base64 stored in DB for deployment safety)
+  attachmentName String?                        // original filename e.g. "report.pdf"
+  attachmentType String?                        // MIME type e.g. "application/pdf"
+  attachmentSize Int?                           // file size in bytes
+  attachmentData String?                        // base64-encoded file content
+  // Reply-to reference
+  replyToId      String?                        // ID of the message being replied to
+  replyTo        ChatMessage? @relation("ChatReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies        ChatMessage[] @relation("ChatReplies")
+  createdAt      DateTime @default(now())
+  reactions      ChatReaction[]
+}
+
+// ── Chat Reaction ───────────────────────────────────────────────────────────
+model ChatReaction {
+  id        String      @id @default(cuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String                               // who reacted
+  userName  String                               // denormalized
+  emoji     String                               // e.g. "👍", "❤️"
+  createdAt DateTime    @default(now())
+
+  @@unique([messageId, userId, emoji])            // one reaction per user per emoji per message
+  @@index([messageId])
 }

@@ -2,15 +2,19 @@
 
 import { useState } from "react";
 import Sidebar from "@/components/Sidebar";
+import Modal from "@/components/Modal";
 import { useApp } from "@/context/AppContext";
+import { useAuth, ROLE_LABELS, type Role } from "@/context/AuthContext";
+import { useFontSize, type FontSize } from "@/context/FontSizeContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type ColorOption = { bg: string; text: string; dot: string; label: string };
 type Tag = { label: string; color: ColorOption };
 type NotifKey = "newLead" | "dealClosed" | "taskDue" | "weeklyReport" | "teamActivity" | "emailOpen";
+type LayoutDensity = "compact" | "comfortable";
 
-// ── Color palette ──────────────────────────────────────────────────────────────
+// ── Color palette (restored from original) ─────────────────────────────────────
 
 const COLORS: ColorOption[] = [
   { bg: "bg-blue-100",   text: "text-blue-700",   dot: "bg-blue-500",   label: "Blue" },
@@ -25,7 +29,7 @@ const COLORS: ColorOption[] = [
   { bg: "bg-gray-100",   text: "text-gray-600",   dot: "bg-gray-400",   label: "Gray" },
 ];
 
-// ── Default data ───────────────────────────────────────────────────────────────
+// ── Default data (restored from original) ──────────────────────────────────────
 
 const DEFAULT_STATUSES: Tag[] = [
   { label: "New",       color: COLORS[0] },
@@ -59,13 +63,13 @@ const ACCENT_COLORS = [
   { name: "Slate",  active: "bg-slate-700",  ring: "ring-slate-700" },
 ];
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── Shared sub-components ──────────────────────────────────────────────────────
 
 function SectionTitle({ title, sub }: { title: string; sub?: string }) {
   return (
     <div className="mb-6">
-      <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-      {sub && <p className="text-sm text-gray-500 mt-0.5">{sub}</p>}
+      <h3 className="text-lg font-semibold text-[#F9FAFB]">{title}</h3>
+      {sub && <p className="text-sm text-[#9CA3AF] mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -73,15 +77,15 @@ function SectionTitle({ title, sub }: { title: string; sub?: string }) {
 function SearchBar({ value, onChange, placeholder = "Search..." }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <div className="relative mb-5">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">⌕</span>
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">⌕</span>
       <input
-        className="w-full border border-gray-200 bg-gray-50 rounded-lg pl-8 pr-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+        className="w-full border border-[#1F2937] bg-[#0F172A] rounded-xl pl-8 pr-3 py-2 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-600"
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
       {value && (
-        <button onClick={() => onChange("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">×</button>
+        <button onClick={() => onChange("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">×</button>
       )}
     </div>
   );
@@ -90,7 +94,7 @@ function SearchBar({ value, onChange, placeholder = "Search..." }: { value: stri
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
       {children}
     </div>
   );
@@ -99,7 +103,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Input({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
     <input
-      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -110,7 +114,7 @@ function Input({ value, onChange, placeholder }: { value: string; onChange: (v: 
 function Select({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
   return (
     <select
-      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     >
@@ -123,7 +127,7 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean
   return (
     <button
       onClick={() => onChange(!enabled)}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? "bg-blue-600" : "bg-gray-200"}`}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? "bg-blue-600" : "bg-gray-700"}`}
     >
       <span
         className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`}
@@ -140,20 +144,15 @@ function SaveBar({ onSave }: { onSave: () => void }) {
     setTimeout(() => setSaved(false), 2000);
   }
   return (
-    <div className="flex justify-end pt-6 border-t border-gray-200 mt-6">
-      <button
-        onClick={handle}
-        className={`px-5 py-2 text-sm font-medium rounded-lg transition-colors ${
-          saved ? "bg-green-600 text-white" : "bg-blue-600 text-white hover:bg-blue-700"
-        }`}
-      >
+    <div className="flex justify-end pt-6 border-t border-[#1F2937] mt-6">
+      <button onClick={handle} className={`px-5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-sm ${saved ? "bg-green-600 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}>
         {saved ? "✓ Saved" : "Save Changes"}
       </button>
     </div>
   );
 }
 
-// ── Tag manager (statuses / sources / stages) ──────────────────────────────────
+// ── Tag manager (restored from original) ───────────────────────────────────────
 
 function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => void }) {
   const [newLabel, setNewLabel] = useState("");
@@ -183,15 +182,14 @@ function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => v
   return (
     <div className="space-y-2">
       {tags.map((tag, i) => (
-        <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-lg px-3 py-2.5 border border-gray-200">
-          {/* Color dot / picker trigger */}
+        <div key={i} className="flex items-center gap-3 bg-[#0F172A] rounded-xl px-3 py-2.5 border border-[#1F2937]">
           <div className="relative">
             <button
               onClick={() => setEditIdx(editIdx === i ? null : i)}
-              className={`w-5 h-5 rounded-full ${tag.color.dot} flex-shrink-0 ring-2 ring-white border border-gray-300`}
+              className={`w-5 h-5 rounded-full ${tag.color.dot} flex-shrink-0 ring-2 ring-[#111827] border border-[#374151]`}
             />
             {editIdx === i && (
-              <div className="absolute top-7 left-0 z-10 bg-white border border-gray-200 rounded-xl shadow-lg p-3 grid grid-cols-5 gap-2 w-44">
+              <div className="absolute top-7 left-0 z-10 bg-[#111827] border border-[#1F2937] rounded-xl shadow-lg p-3 grid grid-cols-5 gap-2 w-44">
                 {COLORS.map((c) => (
                   <button
                     key={c.label}
@@ -203,32 +201,25 @@ function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => v
               </div>
             )}
           </div>
-
-          {/* Badge preview */}
           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${tag.color.bg} ${tag.color.text} flex-shrink-0`}>
             {tag.label}
           </span>
-
-          {/* Edit label */}
           <input
-            className="flex-1 text-sm text-gray-900 bg-transparent border-b border-transparent focus:border-gray-300 focus:outline-none"
+            className="flex-1 text-sm text-[#F9FAFB] bg-transparent border-b border-transparent focus:border-gray-600 focus:outline-none"
             value={tag.label}
             onChange={(e) => updateLabel(i, e.target.value)}
           />
-
-          <button onClick={() => remove(i)} className="text-gray-300 hover:text-red-500 transition-colors text-lg leading-none flex-shrink-0">×</button>
+          <button onClick={() => remove(i)} className="text-gray-600 hover:text-red-500 transition-colors text-lg leading-none flex-shrink-0">×</button>
         </div>
       ))}
-
-      {/* Add row */}
       <div className="flex items-center gap-2 mt-3">
         <div className="relative">
           <button
             onClick={() => setEditIdx(editIdx === -1 ? null : -1)}
-            className={`w-5 h-5 rounded-full ${newColor.dot} ring-2 ring-white border border-gray-300`}
+            className={`w-5 h-5 rounded-full ${newColor.dot} ring-2 ring-[#111827] border border-[#374151]`}
           />
           {editIdx === -1 && (
-            <div className="absolute top-7 left-0 z-10 bg-white border border-gray-200 rounded-xl shadow-lg p-3 grid grid-cols-5 gap-2 w-44">
+            <div className="absolute top-7 left-0 z-10 bg-[#111827] border border-[#1F2937] rounded-xl shadow-lg p-3 grid grid-cols-5 gap-2 w-44">
               {COLORS.map((c) => (
                 <button
                   key={c.label}
@@ -241,7 +232,7 @@ function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => v
           )}
         </div>
         <input
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]"
           placeholder="New item..."
           value={newLabel}
           onChange={(e) => setNewLabel(e.target.value)}
@@ -250,7 +241,7 @@ function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => v
         <button
           onClick={add}
           disabled={!newLabel.trim()}
-          className="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors"
+          className="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-40 transition-colors"
         >
           Add
         </button>
@@ -259,10 +250,27 @@ function TagManager({ tags, onChange }: { tags: Tag[]; onChange: (t: Tag[]) => v
   );
 }
 
+// ── Layout density hook (V2 new) ───────────────────────────────────────────────
+
+function useLayoutDensity(): [LayoutDensity, (d: LayoutDensity) => void] {
+  const [density, setDensityState] = useState<LayoutDensity>(() => {
+    if (typeof window === "undefined") return "comfortable";
+    return (localStorage.getItem("crm_layout_density") as LayoutDensity) || "comfortable";
+  });
+  function setDensity(d: LayoutDensity) {
+    setDensityState(d);
+    localStorage.setItem("crm_layout_density", d);
+    document.documentElement.setAttribute("data-density", d);
+  }
+  return [density, setDensity];
+}
+
 // ── Sections ───────────────────────────────────────────────────────────────────
 
+// ── General (restored from original) ───────────────────────────────────────────
+
 function GeneralSection() {
-  const [company, setCompany] = useState("My CRM");
+  const [company, setCompany] = useState("AutoCRM");
   const [timezone, setTimezone] = useState("UTC−5 (Eastern Time)");
   const [currency, setCurrency] = useState("USD ($)");
   const [dateFormat, setDateFormat] = useState("MMM DD, YYYY");
@@ -287,7 +295,7 @@ function GeneralSection() {
       <SearchBar value={search} onChange={setSearch} placeholder="Search settings..." />
       <div className="space-y-5 max-w-lg">
         {visible.length > 0 ? visible.map((f) => <Field key={f.label} label={f.label}>{f.node}</Field>) : (
-          <p className="text-sm text-gray-400">No settings match your search.</p>
+          <p className="text-sm text-gray-500">No settings match your search.</p>
         )}
       </div>
       <SaveBar onSave={() => {}} />
@@ -295,57 +303,132 @@ function GeneralSection() {
   );
 }
 
+// ── Profile (V2 with AuthContext + restored bio & avatar color from V1) ────────
+
 function ProfileSection() {
-  const [name, setName] = useState("Nikusha");
-  const [email, setEmail] = useState("nikusha@company.com");
-  const [role, setRole] = useState("Admin");
+  const { user, updateProfile } = useAuth();
+  const [name, setName] = useState(user?.name ?? "");
+  const [email, setEmail] = useState(user?.email ?? "");
   const [bio, setBio] = useState("");
   const [avatarColor, setAvatarColor] = useState("bg-blue-600");
-  const [search, setSearch] = useState("");
+
+  function handleSave() {
+    updateProfile({ name, email });
+  }
 
   const avatarColors = ["bg-blue-600", "bg-violet-600", "bg-rose-500", "bg-amber-500", "bg-teal-600", "bg-slate-700"];
   const initials = name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
 
-  const fields = [
-    { label: "Full Name",     node: <Input value={name} onChange={setName} placeholder="Your name" /> },
-    { label: "Email",         node: <Input value={email} onChange={setEmail} placeholder="you@example.com" /> },
-    { label: "Role",          node: <Select value={role} onChange={setRole} options={["Admin", "Manager", "Sales Rep", "Viewer"]} /> },
-    { label: "Bio",           node: <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" rows={3} placeholder="A short bio..." value={bio} onChange={(e) => setBio(e.target.value)} /> },
-    { label: "Avatar Color",  node: <div className="flex gap-1.5">{avatarColors.map((c) => (<button key={c} onClick={() => setAvatarColor(c)} className={`w-6 h-6 rounded-full ${c} border-2 transition-transform hover:scale-110 ${avatarColor === c ? "border-gray-800 scale-110" : "border-transparent"}`} />))}</div> },
-  ];
-
-  const visible = search.trim()
-    ? fields.filter((f) => f.label.toLowerCase().includes(search.toLowerCase()))
-    : fields;
-
   return (
     <div>
       <SectionTitle title="Profile" sub="Your personal information and preferences." />
-      <SearchBar value={search} onChange={setSearch} placeholder="Search profile fields..." />
       <div className="flex items-start gap-8 mb-6">
         <div className="flex flex-col items-center gap-3 flex-shrink-0">
-          <div className={`w-16 h-16 rounded-full ${avatarColor} flex items-center justify-center text-white text-xl font-bold`}>
+          <div className={`w-16 h-16 rounded-2xl ${avatarColor} flex items-center justify-center text-white text-xl font-bold shadow-md`}>
             {initials || "?"}
           </div>
         </div>
         <div className="flex-1 space-y-4 max-w-sm">
-          {visible.length > 0 ? visible.map((f) => <Field key={f.label} label={f.label}>{f.node}</Field>) : (
-            <p className="text-sm text-gray-400">No fields match your search.</p>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Full Name</label>
+            <input className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
+            <input className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Role</label>
+            <div className="px-3 py-2.5 bg-[#1F2937] rounded-xl text-sm text-gray-400 font-medium">
+              {user ? ROLE_LABELS[user.role] : "—"}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Bio</label>
+            <textarea className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" rows={3} placeholder="A short bio..." value={bio} onChange={(e) => setBio(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Avatar Color</label>
+            <div className="flex gap-1.5">
+              {avatarColors.map((c) => (
+                <button key={c} onClick={() => setAvatarColor(c)} className={`w-7 h-7 rounded-full ${c} border-2 transition-transform hover:scale-110 ${avatarColor === c ? "border-gray-800 scale-110" : "border-transparent"}`} />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={handleSave} />
     </div>
   );
 }
 
+// ── Change Password (V2 new) ──────────────────────────────────────────────────
+
+function PasswordSection() {
+  const { changePassword } = useAuth();
+  const [oldPw, setOldPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  function handleSave() {
+    if (newPw !== confirmPw) { setMsg({ ok: false, text: "Passwords do not match" }); return; }
+    const result = changePassword(oldPw, newPw);
+    if (result.ok) {
+      setMsg({ ok: true, text: "Password changed successfully" });
+      setOldPw(""); setNewPw(""); setConfirmPw("");
+    } else {
+      setMsg({ ok: false, text: result.error ?? "Error" });
+    }
+    setTimeout(() => setMsg(null), 3000);
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Change Password" sub="Update your account password." />
+      <div className="space-y-4 max-w-sm">
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Current Password</label>
+          <input type="password" className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={oldPw} onChange={(e) => setOldPw(e.target.value)} placeholder="Enter current password" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">New Password</label>
+          <input type="password" className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={newPw} onChange={(e) => setNewPw(e.target.value)} placeholder="At least 6 characters" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Confirm New Password</label>
+          <input type="password" className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} placeholder="Repeat new password" />
+        </div>
+        {msg && (
+          <p className={`text-sm px-3 py-2 rounded-xl ${msg.ok ? "bg-green-900/20 text-green-400 border border-green-800" : "bg-red-900/20 text-red-700 border border-red-800"}`}>{msg.text}</p>
+        )}
+      </div>
+      <SaveBar onSave={handleSave} />
+    </div>
+  );
+}
+
+// ── Appearance (restored from V1 + merged V2 font size & layout density) ──────
+
 function AppearanceSection() {
   const [accent, setAccent] = useState("Blue");
-  const [density, setDensity] = useState("Comfortable");
   const [sidebarStyle, setSidebarStyle] = useState("Light");
   const [search, setSearch] = useState("");
+  const { fontSize, setFontSize } = useFontSize();
+  const [density, setDensity] = useLayoutDensity();
 
-  const groups = ["Accent Color", "Table Density", "Sidebar Style"];
+  const sizes: { key: FontSize; label: string; desc: string }[] = [
+    { key: "small",  label: "Small",  desc: "Compact layout, more content visible" },
+    { key: "medium", label: "Medium", desc: "Default comfortable reading size" },
+    { key: "large",  label: "Large",  desc: "Larger text for accessibility" },
+  ];
+
+  const densities: { key: LayoutDensity; label: string; desc: string }[] = [
+    { key: "compact",     label: "Compact",     desc: "Tighter spacing, more content on screen" },
+    { key: "comfortable", label: "Comfortable", desc: "Relaxed spacing for easier reading" },
+  ];
+
+  const groups = ["Accent Color", "Font Size", "Layout Density", "Sidebar Style"];
   const visible = search.trim() ? groups.filter((g) => g.toLowerCase().includes(search.toLowerCase())) : groups;
 
   return (
@@ -353,54 +436,88 @@ function AppearanceSection() {
       <SectionTitle title="Appearance" sub="Customize the look and feel of your CRM." />
       <SearchBar value={search} onChange={setSearch} placeholder="Search appearance options..." />
       <div className="space-y-8 max-w-lg">
-        {/* Accent color */}
+        {/* Accent color (restored from original) */}
         {visible.includes("Accent Color") && <div>
-          <p className="text-sm font-medium text-gray-700 mb-3">Accent Color</p>
+          <p className="text-sm font-medium text-gray-300 mb-3">Accent Color</p>
           <div className="flex gap-3">
             {ACCENT_COLORS.map((c) => (
               <button
                 key={c.name}
                 onClick={() => setAccent(c.name)}
                 title={c.name}
-                className={`w-8 h-8 rounded-full ${c.active} transition-transform hover:scale-110 border-4 ${accent === c.name ? `border-gray-800 scale-110` : "border-transparent"}`}
+                className={`w-8 h-8 rounded-full ${c.active} transition-transform hover:scale-110 border-4 ${accent === c.name ? "border-gray-800 scale-110" : "border-transparent"}`}
               />
             ))}
           </div>
-          <p className="text-xs text-gray-400 mt-2">Selected: <span className="font-medium text-gray-600">{accent}</span></p>
+          <p className="text-xs text-gray-500 mt-2">Selected: <span className="font-medium text-gray-400">{accent}</span></p>
         </div>}
 
-        {/* Density */}
-        {visible.includes("Table Density") && <div>
-          <p className="text-sm font-medium text-gray-700 mb-3">Table Density</p>
-          <div className="flex gap-3">
-            {["Compact", "Comfortable", "Spacious"].map((d) => (
+        {/* Font Size (V2 new — merged into Appearance) */}
+        {visible.includes("Font Size") && <div>
+          <p className="text-sm font-medium text-gray-300 mb-3">Font Size</p>
+          <div className="space-y-2.5">
+            {sizes.map((s) => (
               <button
-                key={d}
-                onClick={() => setDensity(d)}
-                className={`px-4 py-2 text-sm rounded-lg border transition-colors ${
-                  density === d
-                    ? "bg-blue-50 border-blue-500 text-blue-700 font-medium"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                key={s.key}
+                onClick={() => setFontSize(s.key)}
+                className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl border transition-all text-left ${
+                  fontSize === s.key
+                    ? "bg-blue-900/20 border-blue-500 ring-2 ring-blue-900"
+                    : "border-[#1F2937] hover:bg-[#1F2937]"
                 }`}
               >
-                {d}
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold shadow-sm text-sm ${fontSize === s.key ? "bg-blue-600 text-white" : "bg-[#1F2937] text-gray-400"}`}>
+                  A
+                </div>
+                <div>
+                  <p className={`text-sm font-semibold ${fontSize === s.key ? "text-blue-400" : "text-gray-100"}`}>{s.label}</p>
+                  <p className="text-xs text-[#9CA3AF]">{s.desc}</p>
+                </div>
+                {fontSize === s.key && <span className="ml-auto text-blue-600 font-bold">✓</span>}
               </button>
             ))}
           </div>
         </div>}
 
-        {/* Sidebar style */}
+        {/* Layout Density (V2 new — merged into Appearance) */}
+        {visible.includes("Layout Density") && <div>
+          <p className="text-sm font-medium text-gray-300 mb-3">Layout Density</p>
+          <div className="space-y-2.5">
+            {densities.map((d) => (
+              <button
+                key={d.key}
+                onClick={() => setDensity(d.key)}
+                className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl border transition-all text-left ${
+                  density === d.key
+                    ? "bg-blue-900/20 border-blue-500 ring-2 ring-blue-900"
+                    : "border-[#1F2937] hover:bg-[#1F2937]"
+                }`}
+              >
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shadow-sm ${density === d.key ? "bg-blue-600 text-white" : "bg-[#1F2937] text-gray-400"}`}>
+                  {d.key === "compact" ? "▤" : "▦"}
+                </div>
+                <div>
+                  <p className={`text-sm font-semibold ${density === d.key ? "text-blue-400" : "text-gray-100"}`}>{d.label}</p>
+                  <p className="text-xs text-[#9CA3AF]">{d.desc}</p>
+                </div>
+                {density === d.key && <span className="ml-auto text-blue-600 font-bold">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>}
+
+        {/* Sidebar style (restored from original) */}
         {visible.includes("Sidebar Style") && <div>
-          <p className="text-sm font-medium text-gray-700 mb-3">Sidebar Style</p>
+          <p className="text-sm font-medium text-gray-300 mb-3">Sidebar Style</p>
           <div className="flex gap-3">
             {["Light", "Dark"].map((s) => (
               <button
                 key={s}
                 onClick={() => setSidebarStyle(s)}
-                className={`flex items-center gap-2 px-4 py-2 text-sm rounded-lg border transition-colors ${
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm rounded-xl border transition-colors ${
                   sidebarStyle === s
-                    ? "bg-blue-50 border-blue-500 text-blue-700 font-medium"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                    ? "bg-blue-900/20 border-blue-500 text-blue-400 font-medium"
+                    : "border-[#1F2937] text-gray-400 hover:bg-[#1F2937]"
                 }`}
               >
                 <span>{s === "Light" ? "☀" : "🌙"}</span>
@@ -409,12 +526,15 @@ function AppearanceSection() {
             ))}
           </div>
         </div>}
-        {visible.length === 0 && <p className="text-sm text-gray-400">No options match your search.</p>}
+
+        {visible.length === 0 && <p className="text-sm text-gray-500">No options match your search.</p>}
       </div>
       <SaveBar onSave={() => {}} />
     </div>
   );
 }
+
+// ── Lead Statuses (restored from original) ─────────────────────────────────────
 
 function StatusesSection() {
   const [statuses, setStatuses] = useState<Tag[]>(DEFAULT_STATUSES);
@@ -436,6 +556,8 @@ function StatusesSection() {
   );
 }
 
+// ── Lead Sources (restored from original) ──────────────────────────────────────
+
 function SourcesSection() {
   const [sources, setSources] = useState<Tag[]>(DEFAULT_SOURCES);
   const [search, setSearch] = useState("");
@@ -456,6 +578,8 @@ function SourcesSection() {
   );
 }
 
+// ── Pipeline Stages (restored from original) ──────────────────────────────────
+
 function StagesSection() {
   const [stages, setStages] = useState<Tag[]>(DEFAULT_STAGES);
   const [search, setSearch] = useState("");
@@ -475,6 +599,8 @@ function StagesSection() {
     </div>
   );
 }
+
+// ── Notifications (restored from original) ────────────────────────────────────
 
 function NotificationsSection() {
   const [notifs, setNotifs] = useState<Record<NotifKey, boolean>>({
@@ -505,12 +631,12 @@ function NotificationsSection() {
       <SectionTitle title="Notifications" sub="Choose which events you want to be notified about." />
       <SearchBar value={search} onChange={setSearch} placeholder="Search notifications..." />
       <div className="space-y-4 max-w-lg">
-        {visible.length === 0 && <p className="text-sm text-gray-400">No notifications match your search.</p>}
+        {visible.length === 0 && <p className="text-sm text-gray-500">No notifications match your search.</p>}
         {visible.map(({ key, label, sub }) => (
-          <div key={key} className="flex items-start justify-between gap-4 py-3 border-b border-gray-100 last:border-0">
+          <div key={key} className="flex items-start justify-between gap-4 py-3 border-b border-[#1F2937] last:border-0">
             <div>
-              <p className="text-sm font-medium text-gray-800">{label}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{sub}</p>
+              <p className="text-sm font-medium text-gray-100">{label}</p>
+              <p className="text-xs text-[#9CA3AF] mt-0.5">{sub}</p>
             </div>
             <Toggle enabled={notifs[key]} onChange={(v) => setNotifs({ ...notifs, [key]: v })} />
           </div>
@@ -521,7 +647,129 @@ function NotificationsSection() {
   );
 }
 
-// ── Main page ──────────────────────────────────────────────────────────────────
+// ── User Management Section (V2 new — Admin Only) ─────────────────────────────
+
+const roleStyles: Record<string, string> = {
+  admin: "bg-purple-100 text-purple-700",
+  sales_rep: "bg-blue-100 text-blue-700",
+  senior_rep: "bg-emerald-100 text-emerald-700",
+  manager: "bg-amber-100 text-amber-700",
+};
+
+function UsersSection() {
+  const { user, allUsers, createUser, deleteUser, isAdmin } = useAuth();
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "sales_rep" as Role });
+  const [error, setError] = useState("");
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  if (!isAdmin) {
+    return (
+      <div>
+        <SectionTitle title="Users & Roles" sub="Only admins can manage users." />
+        <p className="text-sm text-[#9CA3AF]">You don&apos;t have permission to manage users. Contact an administrator.</p>
+      </div>
+    );
+  }
+
+  function handleCreate() {
+    if (!form.name || !form.email || !form.password) { setError("All fields required"); return; }
+    const result = createUser(form);
+    if (result.ok) {
+      setForm({ name: "", email: "", password: "", role: "sales_rep" });
+      setAddOpen(false);
+      setError("");
+    } else {
+      setError(result.error ?? "Error");
+    }
+  }
+
+  function handleDelete(id: string) {
+    deleteUser(id);
+    setDeleteConfirm(null);
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Users & Roles" sub="Manage team members and their roles. Only admins can add or remove users." />
+
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-[#9CA3AF]">{allUsers.length} users</p>
+        <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-blue-700 transition-all shadow-sm">+ Invite User</button>
+      </div>
+
+      <div className="space-y-2">
+        {allUsers.map((u) => (
+          <div key={u.id} className="flex items-center gap-4 bg-[#0F172A] rounded-xl px-4 py-3 border border-[#1F2937]">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold shadow-sm flex-shrink-0">
+              {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-100 truncate">{u.name}</p>
+              <p className="text-xs text-gray-500 truncate">{u.email}</p>
+            </div>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${roleStyles[u.role] ?? "bg-gray-100 text-gray-600"}`}>
+              {ROLE_LABELS[u.role] ?? u.role}
+            </span>
+            {u.id !== user?.id && (
+              <button onClick={() => setDeleteConfirm(u.id)} className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-900/20 transition-colors flex-shrink-0">
+                Remove
+              </button>
+            )}
+            {u.id === user?.id && (
+              <span className="text-xs text-gray-500 flex-shrink-0">You</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {addOpen && (
+        <Modal title="Invite User" onClose={() => { setAddOpen(false); setError(""); }}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Full Name *</label>
+              <input className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="John Doe" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Email *</label>
+              <input className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="john@company.com" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Password *</label>
+              <input type="password" className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="At least 6 characters" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Role *</label>
+              <select className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}>
+                <option value="sales_rep">Sales Rep</option>
+                <option value="senior_rep">Senior Rep</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            {error && <p className="text-sm text-red-600 bg-red-900/20 border border-red-800 rounded-xl px-3 py-2">{error}</p>}
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => { setAddOpen(false); setError(""); }} className="px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+              <button onClick={handleCreate} className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-sm">Create User</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {deleteConfirm && (
+        <Modal title="Remove User" onClose={() => setDeleteConfirm(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">Are you sure you want to remove this user? They will no longer be able to log in.</p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+              <button onClick={() => handleDelete(deleteConfirm)} className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-xl hover:bg-red-700 transition-all shadow-sm">Remove User</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
 // ── Danger / Data section ──────────────────────────────────────────────────────
 
@@ -539,47 +787,39 @@ function DangerSection() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-base font-semibold text-gray-900">Data & Reset</h3>
-        <p className="text-sm text-gray-500 mt-1">Manage persisted data stored in your browser.</p>
-      </div>
+      <SectionTitle title="Data & Reset" sub="Manage application data." />
 
-      <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-3">
+      <div className="bg-[#0F172A] border border-[#1F2937] rounded-2xl p-5 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+          <div className="w-8 h-8 rounded-xl bg-blue-900/30 flex items-center justify-center flex-shrink-0 mt-0.5">
             <span className="text-sm">💾</span>
           </div>
           <div>
-            <p className="text-sm font-medium text-gray-800">Auto-save active</p>
-            <p className="text-xs text-gray-500 mt-0.5">All changes — leads, tasks, deals, companies, activities — are automatically saved to your browser&apos;s localStorage. Data persists across page refreshes.</p>
+            <p className="text-sm font-medium text-gray-100">Auto-save active</p>
+            <p className="text-xs text-[#9CA3AF] mt-0.5">All changes are automatically saved to the database.</p>
           </div>
         </div>
       </div>
 
-      <div className="border border-red-200 rounded-xl p-5 space-y-4">
+      <div className="border border-red-800 rounded-2xl p-5 space-y-4">
         <div>
           <p className="text-sm font-semibold text-red-700">Reset Demo Data</p>
-          <p className="text-xs text-gray-500 mt-1">Clears all saved data from localStorage and restores the original seed data. This cannot be undone.</p>
+          <p className="text-xs text-[#9CA3AF] mt-1">Clears all data and restores the original seed data. This cannot be undone.</p>
         </div>
 
         {done && (
-          <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-            ✓ Demo data restored successfully.
-          </p>
+          <p className="text-sm text-green-400 bg-green-900/20 border border-green-800 rounded-xl px-3 py-2">✓ Demo data restored successfully.</p>
         )}
 
         {!confirmed ? (
-          <button
-            onClick={() => setConfirmed(true)}
-            className="px-4 py-2 text-sm font-medium bg-red-50 text-red-700 border border-red-300 rounded-lg hover:bg-red-100 transition-colors"
-          >
+          <button onClick={() => setConfirmed(true)} className="px-4 py-2.5 text-sm font-medium bg-red-900/20 text-red-400 border border-red-800 rounded-xl hover:bg-red-900/30 transition-colors">
             Reset Demo Data
           </button>
         ) : (
           <div className="flex items-center gap-3">
-            <p className="text-sm text-red-700 font-medium">Are you sure? This cannot be undone.</p>
-            <button onClick={handleReset} className="px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">Yes, Reset</button>
-            <button onClick={() => setConfirmed(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+            <p className="text-sm text-red-700 font-medium">Are you sure?</p>
+            <button onClick={handleReset} className="px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors">Yes, Reset</button>
+            <button onClick={() => setConfirmed(false)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
           </div>
         )}
       </div>
@@ -592,11 +832,13 @@ function DangerSection() {
 const sections = [
   { key: "general",       label: "General",         icon: "🏠" },
   { key: "profile",       label: "Profile",         icon: "👤" },
-  { key: "appearance",    label: "Appearance",      icon: "🎨" },
+  { key: "password",      label: "Password",        icon: "🔒" },
+  { key: "appearance",    label: "Appearance",       icon: "🎨" },
   { key: "statuses",      label: "Lead Statuses",   icon: "🏷" },
   { key: "sources",       label: "Lead Sources",    icon: "🔗" },
   { key: "stages",        label: "Pipeline Stages", icon: "📊" },
   { key: "notifications", label: "Notifications",   icon: "🔔" },
+  { key: "users",         label: "Users & Roles",   icon: "👥" },
   { key: "danger",        label: "Data & Reset",    icon: "⚠️" },
 ];
 
@@ -606,21 +848,23 @@ export default function SettingsPage() {
   const content: Record<string, React.ReactNode> = {
     general:       <GeneralSection />,
     profile:       <ProfileSection />,
+    password:      <PasswordSection />,
     appearance:    <AppearanceSection />,
     statuses:      <StatusesSection />,
     sources:       <SourcesSection />,
     stages:        <StagesSection />,
     notifications: <NotificationsSection />,
+    users:         <UsersSection />,
     danger:        <DangerSection />,
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#0B0F14]">
       <Sidebar />
       <main className="pt-16 lg:pt-0 lg:ml-64 p-4 sm:p-6 lg:p-8">
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
-          <p className="text-sm text-gray-500 mt-1">Manage your workspace, profile, and preferences.</p>
+          <h2 className="text-2xl font-bold text-[#F9FAFB]">Settings</h2>
+          <p className="text-sm text-[#9CA3AF] mt-1">Manage your workspace, profile, and preferences.</p>
         </div>
 
         {/* Mobile section selector */}
@@ -628,7 +872,7 @@ export default function SettingsPage() {
           <select
             value={active}
             onChange={(e) => setActive(e.target.value)}
-            className="w-full border border-gray-200 bg-white rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full border border-[#1F2937] bg-[#111827] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             {sections.map((s) => (
               <option key={s.key} value={s.key}>{s.icon} {s.label}</option>
@@ -644,10 +888,10 @@ export default function SettingsPage() {
                 <li key={s.key}>
                   <button
                     onClick={() => setActive(s.key)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all text-left ${
                       active === s.key
-                        ? "bg-blue-50 text-blue-700"
-                        : "text-gray-600 hover:bg-gray-100"
+                        ? "bg-blue-500/15 text-blue-400 shadow-sm"
+                        : "text-gray-400 hover:bg-[#1F2937] hover:text-gray-100"
                     }`}
                   >
                     <span>{s.icon}</span>
@@ -659,7 +903,7 @@ export default function SettingsPage() {
           </nav>
 
           {/* Content */}
-          <div className="flex-1 bg-white rounded-xl border border-gray-200 p-4 sm:p-6 lg:p-8 min-h-96">
+          <div className="flex-1 bg-[#111827] rounded-2xl border border-[#1F2937] p-4 sm:p-6 lg:p-8 min-h-96 shadow-sm">
             {content[active]}
           </div>
         </div>

@@ -129,24 +129,24 @@ const STAGE_COLORS: Record<string, string> = {
 
 function KPICard({ label, value, sub, icon }: { label: string; value: string; sub?: string; icon: string }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
+    <div className="bg-[#111827] rounded-xl border border-[#1F2937] p-5">
       <div className="flex items-center justify-between mb-2">
-        <p className="text-sm font-medium text-gray-500">{label}</p>
+        <p className="text-sm font-medium text-[#9CA3AF]">{label}</p>
         <span className="text-lg">{icon}</span>
       </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+      <p className="text-2xl font-bold text-[#F9FAFB]">{value}</p>
+      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
     </div>
   );
 }
 
 function MetricRow({ label, value, subValue }: { label: string; value: string; subValue?: string }) {
   return (
-    <div className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
-      <span className="text-sm text-gray-500">{label}</span>
+    <div className="flex items-center justify-between py-2.5 border-b border-[#1F2937] last:border-0">
+      <span className="text-sm text-[#9CA3AF]">{label}</span>
       <div className="text-right">
-        <span className="text-sm font-semibold text-gray-900">{value}</span>
-        {subValue && <span className="text-xs text-gray-400 ml-1.5">{subValue}</span>}
+        <span className="text-sm font-semibold text-[#F9FAFB]">{value}</span>
+        {subValue && <span className="text-xs text-gray-500 ml-1.5">{subValue}</span>}
       </div>
     </div>
   );
@@ -157,15 +157,15 @@ function UserCard({ m }: { m: UserMetrics }) {
   const taskPct = m.totalTasks > 0 ? Math.round((m.tasksCompleted / m.totalTasks) * 100) : 0;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="bg-[#111827] rounded-xl border border-[#1F2937] overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
+      <div className="px-5 py-4 border-b border-[#1F2937] flex items-center gap-3">
         <div className={`w-10 h-10 rounded-full ${m.color} flex items-center justify-center text-white font-semibold text-sm`}>
           {initials}
         </div>
         <div>
-          <p className="text-sm font-semibold text-gray-900">{m.name}</p>
-          <p className="text-xs text-gray-400">{m.role}</p>
+          <p className="text-sm font-semibold text-[#F9FAFB]">{m.name}</p>
+          <p className="text-xs text-gray-500">{m.role}</p>
         </div>
       </div>
 
@@ -180,12 +180,12 @@ function UserCard({ m }: { m: UserMetrics }) {
       </div>
 
       {/* Pipeline bar */}
-      <div className="px-5 py-3 bg-gray-50 border-t border-gray-100">
+      <div className="px-5 py-3 bg-[#0B0F14] border-t border-[#1F2937]">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium text-gray-500">Pipeline Value</span>
-          <span className="text-xs font-bold text-gray-700">{fmtDollar(m.pipelineValue)}</span>
+          <span className="text-xs font-medium text-[#9CA3AF]">Pipeline Value</span>
+          <span className="text-xs font-bold text-gray-300">{fmtDollar(m.pipelineValue)}</span>
         </div>
-        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
           <div
             className={`h-full ${m.color} rounded-full transition-all`}
             style={{ width: `${Math.min(100, (m.pipelineValue / Math.max(m.pipelineValue, m.wonValue, 1)) * 100)}%` }}
@@ -273,15 +273,15 @@ export default function ReportsPage() {
   // ── Admin-only guard ────────────────────────────────────────────────────
   if (!isAdmin) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-[#0B0F14]">
         <Sidebar />
         <main className="pt-16 lg:pt-0 lg:ml-64 p-4 sm:p-6 lg:p-8">
           <div className="flex flex-col items-center justify-center h-[60vh] text-center">
-            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+            <div className="w-16 h-16 bg-red-900/30 rounded-full flex items-center justify-center mb-4">
               <span className="text-2xl">🔒</span>
             </div>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Admin Access Required</h2>
-            <p className="text-sm text-gray-500 max-w-md">
+            <h2 className="text-xl font-bold text-[#F9FAFB] mb-2">Admin Access Required</h2>
+            <p className="text-sm text-[#9CA3AF] max-w-md">
               The performance dashboard is restricted to administrators. Please contact your admin for access.
             </p>
           </div>
@@ -291,14 +291,14 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[#0B0F14]">
       <Sidebar />
       <main className="pt-16 lg:pt-0 lg:ml-64 p-4 sm:p-6 lg:p-8">
         {!loaded ? <PageLoading /> : (<>
         {/* Header */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gray-900">Performance Dashboard</h2>
-          <p className="text-sm text-gray-500 mt-1">Team metrics from live CRM data</p>
+          <h2 className="text-2xl font-bold text-[#F9FAFB]">Performance Dashboard</h2>
+          <p className="text-sm text-[#9CA3AF] mt-1">Team metrics from live CRM data</p>
         </div>
 
         {/* ── Global KPIs ──────────────────────────────────────────────────── */}
@@ -311,7 +311,7 @@ export default function ReportsPage() {
 
         {/* ── Per-user performance cards ──────────────────────────────────── */}
         <div className="mb-8">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Team Performance</h3>
+          <h3 className="text-lg font-semibold text-[#F9FAFB] mb-4">Team Performance</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
             {teamMetrics.map((m) => (
               <UserCard key={m.id} m={m} />
@@ -322,16 +322,16 @@ export default function ReportsPage() {
         {/* ── Bottom row: Funnel + Top Deals ─────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {/* Deal stage funnel */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="font-semibold text-gray-800 mb-5">Deal Pipeline Stages</h3>
+          <div className="bg-[#111827] rounded-xl border border-[#1F2937] p-5">
+            <h3 className="font-semibold text-gray-100 mb-5">Deal Pipeline Stages</h3>
             <div className="space-y-3">
               {stageCounts.map((s) => (
                 <div key={s.stage}>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600">{s.stage}</span>
-                    <span className="text-xs text-gray-400">{s.count} deals &middot; {fmtDollar(s.value)}</span>
+                    <span className="text-xs font-medium text-gray-400">{s.stage}</span>
+                    <span className="text-xs text-gray-500">{s.count} deals &middot; {fmtDollar(s.value)}</span>
                   </div>
-                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-3 bg-gray-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full ${STAGE_COLORS[s.stage] ?? "bg-gray-400"} rounded-full transition-all`}
                       style={{ width: `${(s.count / maxStageCount) * 100}%` }}
@@ -343,29 +343,29 @@ export default function ReportsPage() {
           </div>
 
           {/* Top deals */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="font-semibold text-gray-800 mb-4">Top Deals by Value</h3>
+          <div className="bg-[#111827] rounded-xl border border-[#1F2937] p-5">
+            <h3 className="font-semibold text-gray-100 mb-4">Top Deals by Value</h3>
             {topDeals.length === 0 ? (
-              <p className="text-sm text-gray-400 italic">No deals yet.</p>
+              <p className="text-sm text-gray-500 italic">No deals yet.</p>
             ) : (
               <ul className="space-y-3">
                 {topDeals.map((deal, i) => {
                   const stageColor = deal.won
                     ? "bg-green-100 text-green-700"
                     : deal.lost
-                      ? "bg-red-100 text-red-500"
-                      : "bg-gray-100 text-gray-600";
+                      ? "bg-red-900/30 text-red-500"
+                      : "bg-gray-800 text-gray-400";
                   return (
                     <li key={deal.id} className="flex items-center gap-3">
-                      <span className="text-xs font-bold text-gray-300 w-4">{i + 1}</span>
+                      <span className="text-xs font-bold text-gray-600 w-4">{i + 1}</span>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-800 truncate">{deal.name}</p>
+                        <p className="text-sm font-medium text-gray-100 truncate">{deal.name}</p>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${stageColor}`}>{deal.stage}</span>
-                          {deal.owner && <span className="text-[10px] text-gray-400">{deal.owner}</span>}
+                          {deal.owner && <span className="text-[10px] text-gray-500">{deal.owner}</span>}
                         </div>
                       </div>
-                      <span className="text-sm font-semibold text-gray-700">{deal.value}</span>
+                      <span className="text-sm font-semibold text-gray-300">{deal.value}</span>
                     </li>
                   );
                 })}

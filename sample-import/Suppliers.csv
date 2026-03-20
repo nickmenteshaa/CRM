@@ -1,0 +1,7 @@
+﻿Supplier Name,Contact Name,Email,Phone,Country,Website,Lead Time (Days),MOQ,Rating,Notes
+Bosch Automotive Parts,Hans Weber,orders@bosch-auto.de,+49-711-5550100,Germany,bosch-automotive.com,14,50,5,"Tier 1 OEM supplier, priority partner"
+Mann+Hummel,Klaus Fischer,supply@mann-hummel.com,+49-714-5550200,Germany,mann-hummel.com,10,100,5,Filtration specialist
+Denso Europe,Yuki Tanaka,eu-orders@denso.com,+31-20-5550300,Netherlands,denso.com,21,30,4,Japanese OEM quality
+Continental AG,Maria Schmidt,parts@continental.de,+49-511-5550400,Germany,continental-automotive.com,12,25,4,"Belts, hoses, sensors"
+Valeo Service,Pierre Duval,service@valeo.com,+33-1-5550500,France,valeo.com,18,20,4,"Clutch, thermal, lighting"
+Nissens A/S,Lars Andersen,sales@nissens.com,+45-76-5550600,Denmark,nissens.com,15,10,3,Cooling and climate parts
