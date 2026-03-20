@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Lead ───────────────────────────────────────────────────────────────────────
+model Lead {
+  id            String     @id @default(cuid())
+  name          String
+  email         String
+  phone         String
+  status        String
+  source        String
+  lastContact   String                       // display string e.g. "Today", "Mar 18"
+  lastContactAt DateTime?                    // used for 7-day staleness check
+  summary       String?                      // AI-generated activity summary
+  nextAction    String?                      // suggested next best action
+  convSummary   String?                      // AI summary of pasted conversation text
+  followUpDraft String?                      // AI-suggested follow-up message
+  ownerId       String?                      // auth user id; null = unassigned (visible to all)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  activities    Activity[]
+  deals         Deal[]
+  messages      Message[]
+}
+
+// ── Task ───────────────────────────────────────────────────────────────────────
+model Task {
+  id        String   @id @default(cuid())
+  title     String
+  leadName  String
+  leadId    String?                          // soft FK — nullable; auto tasks may outlive leads
+  due       String                           // display string or ISO date
+  priority  String
+  done      Boolean  @default(false)
+  auto      Boolean  @default(false)         // true = system-generated
+  ownerId   String?                          // auth user id; null = unassigned
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Deal ───────────────────────────────────────────────────────────────────────
+model Deal {
+  id        String    @id @default(cuid())
+  name      String
+  contact   String
+  value     String
+  stage     String
+  close     String?
+  leadId    String?
+  lead      Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  leadName  String?
+  owner     String?
+  ownerId   String?                          // auth user id; null = unassigned
+  won       Boolean   @default(false)
+  lost      Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+// ── Activity ───────────────────────────────────────────────────────────────────
+model Activity {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type      String                           // "Call" | "Email" | "Meeting" | "Note"
+  note      String
+  date      String                           // display string e.g. "Mar 20"
+  createdAt DateTime @default(now())
+}
+
+// ── Message (communication record) ───────────────────────────────────────────
+model Message {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  dealId    String?                          // optional link to a deal
+  channel   String                           // "Email" | "WhatsApp" | "SMS" | "LinkedIn" | "Other"
+  direction String                           // "inbound" | "outbound"
+  subject   String?                          // email subject line (optional)
+  body      String                           // message content
+  sender    String                           // who sent it
+  recipient String                           // who received it
+  date      String                           // display string e.g. "Mar 20"
+  createdAt DateTime @default(now())
+}
+
+// ── Company ────────────────────────────────────────────────────────────────────
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  industry  String
+  contacts  Int      @default(0)
+  revenue   String
+  status    String
+  website   String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
