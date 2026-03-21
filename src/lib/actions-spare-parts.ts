@@ -215,6 +215,320 @@ export async function dbGetPartsFilterOptions(): Promise<{
   };
 }
 
+// ── PAGINATED SUPPLIERS QUERY ────────────────────────────────────────────────
+
+export type SuppliersPageResult = {
+  suppliers: Supplier[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export async function dbGetSuppliersPaginated(opts: {
+  page?: number;
+  limit?: number;
+  query?: string;
+  country?: string;
+  rating?: string;
+  isActive?: "all" | "active" | "inactive";
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
+}): Promise<SuppliersPageResult> {
+  const page = Math.max(1, opts.page ?? 1);
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const skip = (page - 1) * limit;
+
+  const where: Record<string, unknown> = {};
+
+  if (opts.query?.trim()) {
+    const q = opts.query.trim();
+    where.OR = [
+      { name: { contains: q, mode: "insensitive" } },
+      { contactName: { contains: q, mode: "insensitive" } },
+      { email: { contains: q, mode: "insensitive" } },
+      { phone: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  if (opts.country && opts.country !== "all") {
+    where.country = opts.country;
+  }
+
+  if (opts.rating && opts.rating !== "all") {
+    where.rating = parseInt(opts.rating, 10);
+  }
+
+  if (opts.isActive === "active") {
+    where.isActive = true;
+  } else if (opts.isActive === "inactive") {
+    where.isActive = false;
+  }
+
+  const allowedSorts = ["name", "contactName", "country", "leadTimeDays", "rating", "createdAt"];
+  const sortField = opts.sortKey && allowedSorts.includes(opts.sortKey) ? opts.sortKey : "createdAt";
+  const sortDirection = opts.sortDir === "asc" ? "asc" : "desc";
+  const orderBy = { [sortField]: sortDirection };
+
+  const [rows, total] = await Promise.all([
+    prisma.supplier.findMany({ where: where as any, orderBy, skip, take: limit }),
+    prisma.supplier.count({ where: where as any }),
+  ]);
+
+  return {
+    suppliers: rows.map(mapSupplier),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
+export async function dbGetSuppliersFilterOptions(): Promise<{
+  countries: string[];
+  ratings: number[];
+}> {
+  const [countryRows, ratingRows] = await Promise.all([
+    prisma.supplier.findMany({ where: { country: { not: null } }, select: { country: true }, distinct: ["country"] }),
+    prisma.supplier.findMany({ where: { rating: { not: null } }, select: { rating: true }, distinct: ["rating"] }),
+  ]);
+  return {
+    countries: countryRows.map((r) => r.country!).sort(),
+    ratings: ratingRows.map((r) => r.rating!).sort(),
+  };
+}
+
+export async function dbBulkCreateSuppliers(
+  records: Omit<Supplier, "id">[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  const SUB_BATCH = 50;
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.supplier.createMany({
+          data: chunk.map((d) => ({
+            name: d.name,
+            contactName: d.contactName,
+            email: d.email,
+            phone: d.phone,
+            country: d.country,
+            website: d.website,
+            leadTimeDays: d.leadTimeDays,
+            moq: d.moq,
+            rating: d.rating,
+            notes: d.notes,
+            isActive: d.isActive ?? true,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          return {
+            created: totalCreated,
+            skipped: totalSkipped,
+            error: `Failed at rows ${i + 1}–${Math.min(i + SUB_BATCH, records.length)}: ${msg}`,
+          };
+        }
+      }
+    }
+  }
+
+  return { created: totalCreated, skipped: totalSkipped };
+}
+
+// ── PAGINATED INVENTORY QUERY ───────────────────────────────────────────────
+
+export type InventoryPageResult = {
+  items: (InventoryItem & { partName: string; sku: string; warehouseName: string })[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export async function dbGetInventoryPaginated(opts: {
+  page?: number;
+  limit?: number;
+  query?: string;
+  warehouseId?: string;
+  stockStatus?: "all" | "instock" | "low" | "out";
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
+}): Promise<InventoryPageResult> {
+  const page = Math.max(1, opts.page ?? 1);
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const skip = (page - 1) * limit;
+
+  const where: Record<string, unknown> = {};
+
+  if (opts.query?.trim()) {
+    const q = opts.query.trim();
+    where.OR = [
+      { part: { name: { contains: q, mode: "insensitive" } } },
+      { part: { sku: { contains: q, mode: "insensitive" } } },
+      { warehouse: { name: { contains: q, mode: "insensitive" } } },
+      { binLocation: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  if (opts.warehouseId && opts.warehouseId !== "all") {
+    where.warehouseId = opts.warehouseId;
+  }
+
+  if (opts.stockStatus === "out") {
+    where.quantityOnHand = 0;
+  } else if (opts.stockStatus === "low") {
+    // low stock: qty > 0 but <= reorderPoint — use raw filter
+    where.quantityOnHand = { gt: 0 };
+    where.AND = [
+      { quantityOnHand: { gt: 0 } },
+    ];
+    // We'll do an extra raw approach: for "low" we need qty <= reorderPoint
+    // Prisma doesn't support field-to-field comparisons easily, so we filter in app
+    // Actually let's just fetch and post-filter for low-stock
+  } else if (opts.stockStatus === "instock") {
+    where.quantityOnHand = { gt: 0 };
+  }
+
+  const allowedSorts = ["quantityOnHand", "quantityReserved", "reorderPoint", "createdAt"];
+  const sortField = opts.sortKey && allowedSorts.includes(opts.sortKey) ? opts.sortKey : "createdAt";
+  const sortDirection = opts.sortDir === "asc" ? "asc" : "desc";
+
+  // For part-name or sku sorting, we sort by the relation field
+  let orderBy: any;
+  if (opts.sortKey === "partName") {
+    orderBy = { part: { name: sortDirection } };
+  } else if (opts.sortKey === "sku") {
+    orderBy = { part: { sku: sortDirection } };
+  } else if (opts.sortKey === "warehouseName") {
+    orderBy = { warehouse: { name: sortDirection } };
+  } else {
+    orderBy = { [sortField]: sortDirection };
+  }
+
+  // For "low" stock status, we can't do field comparison in Prisma where clause
+  // So we handle it differently: fetch more, filter in app, then paginate
+  if (opts.stockStatus === "low") {
+    delete where.quantityOnHand;
+    delete where.AND;
+    where.quantityOnHand = { gt: 0 };
+
+    const allRows = await prisma.inventory.findMany({
+      where: where as any,
+      include: { part: { select: { name: true, sku: true } }, warehouse: { select: { name: true } } },
+      orderBy,
+    });
+
+    // Filter: qty <= reorderPoint
+    const lowStockRows = allRows.filter((r) => r.quantityOnHand <= r.reorderPoint);
+    const total = lowStockRows.length;
+    const paged = lowStockRows.slice(skip, skip + limit);
+
+    return {
+      items: paged.map((r) => ({
+        ...mapInventory(r),
+        partName: r.part.name,
+        sku: r.part.sku,
+        warehouseName: r.warehouse.name,
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  const [rows, total] = await Promise.all([
+    prisma.inventory.findMany({
+      where: where as any,
+      include: { part: { select: { name: true, sku: true } }, warehouse: { select: { name: true } } },
+      orderBy,
+      skip,
+      take: limit,
+    }),
+    prisma.inventory.count({ where: where as any }),
+  ]);
+
+  return {
+    items: rows.map((r) => ({
+      ...mapInventory(r),
+      partName: r.part.name,
+      sku: r.part.sku,
+      warehouseName: r.warehouse.name,
+    })),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
+export async function dbGetInventoryFilterOptions(): Promise<{
+  warehouses: Warehouse[];
+}> {
+  const warehouses = await prisma.warehouse.findMany({ orderBy: { name: "asc" } });
+  return {
+    warehouses: warehouses.map(mapWarehouse),
+  };
+}
+
+export async function dbBulkCreateInventory(
+  records: { partId: string; warehouseId: string; quantityOnHand: number; quantityReserved?: number; reorderPoint?: number; binLocation?: string }[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  const SUB_BATCH = 50;
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.inventory.createMany({
+          data: chunk.map((d) => ({
+            partId: d.partId,
+            warehouseId: d.warehouseId,
+            quantityOnHand: d.quantityOnHand,
+            quantityReserved: d.quantityReserved ?? 0,
+            reorderPoint: d.reorderPoint ?? 0,
+            binLocation: d.binLocation,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          return {
+            created: totalCreated,
+            skipped: totalSkipped,
+            error: `Failed at rows ${i + 1}–${Math.min(i + SUB_BATCH, records.length)}: ${msg}`,
+          };
+        }
+      }
+    }
+  }
+
+  return { created: totalCreated, skipped: totalSkipped };
+}
+
 // ── READS (bulk — used by other pages like inventory/suppliers) ──────────────
 
 export async function dbGetSparePartsData(): Promise<{
@@ -541,6 +855,51 @@ export async function dbUpdateOrderLine(id: string, updates: Partial<OrderLine>)
 
 export async function dbDeleteOrderLine(id: string): Promise<void> {
   await prisma.orderLine.delete({ where: { id } });
+}
+
+export async function dbBulkCreateOrderLines(
+  records: Omit<OrderLine, "id">[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  const SUB_BATCH = 50;
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.orderLine.createMany({
+          data: chunk.map((d) => ({
+            dealId: d.dealId,
+            partId: d.partId,
+            quantity: d.quantity,
+            unitPrice: d.unitPrice || null,
+            discount: d.discount || null,
+            lineTotal: d.lineTotal || null,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          return {
+            created: totalCreated,
+            skipped: totalSkipped,
+            error: `Failed at rows ${i + 1}–${Math.min(i + SUB_BATCH, records.length)}: ${msg}`,
+          };
+        }
+      }
+    }
+  }
+
+  return { created: totalCreated, skipped: totalSkipped };
 }
 
 // ── RESET: truncate spare-parts tables ───────────────────────────────────────

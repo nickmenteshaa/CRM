@@ -371,9 +371,9 @@ function PasswordSection() {
   const [confirmPw, setConfirmPw] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  function handleSave() {
+  async function handleSave() {
     if (newPw !== confirmPw) { setMsg({ ok: false, text: "Passwords do not match" }); return; }
-    const result = changePassword(oldPw, newPw);
+    const result = await changePassword(oldPw, newPw);
     if (result.ok) {
       setMsg({ ok: true, text: "Password changed successfully" });
       setOldPw(""); setNewPw(""); setConfirmPw("");
@@ -672,9 +672,9 @@ function UsersSection() {
     );
   }
 
-  function handleCreate() {
+  async function handleCreate() {
     if (!form.name || !form.email || !form.password) { setError("All fields required"); return; }
-    const result = createUser(form);
+    const result = await createUser(form);
     if (result.ok) {
       setForm({ name: "", email: "", password: "", role: "sales_rep" });
       setAddOpen(false);
@@ -684,8 +684,8 @@ function UsersSection() {
     }
   }
 
-  function handleDelete(id: string) {
-    deleteUser(id);
+  async function handleDelete(id: string) {
+    await deleteUser(id);
     setDeleteConfirm(null);
   }
 

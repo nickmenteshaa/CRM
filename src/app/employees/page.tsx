@@ -5,6 +5,9 @@ import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import { useAuth, ROLE_LABELS, type Role, type AuthUser, type Team } from "@/context/AuthContext";
 import { useApp } from "@/context/AppContext";
+import ImportModal from "@/components/ImportModal";
+import { employeeImportConfig } from "@/lib/import-configs";
+import { dbBulkCreateEmployees } from "@/lib/actions-employees";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +54,7 @@ export default function EmployeesPage() {
     user, isAdmin, allUsers,
     createUser, deleteUser, updateUser, getTeamUserIds,
     teams, createTeam, updateTeam, deleteTeam,
+    refreshUsers,
   } = useAuth();
   const { allLeads, allTasks, allDeals } = useApp();
 
@@ -71,6 +75,9 @@ export default function EmployeesPage() {
   const [teamEditTarget, setTeamEditTarget] = useState<Team | null>(null);
   const [teamName, setTeamName] = useState("");
   const [teamError, setTeamError] = useState("");
+
+  // Import modal
+  const [importOpen, setImportOpen] = useState(false);
 
   // Employee forms
   const [addForm, setAddForm] = useState({ name: "", email: "", password: "", role: "sales_rep" as Role, managerId: "", teamId: "" });
@@ -162,12 +169,12 @@ export default function EmployeesPage() {
 
   // ── Employee CRUD ──────────────────────────────────────────────────────
 
-  function handleAdd() {
+  async function handleAdd() {
     if (!addForm.name.trim() || !addForm.email.trim() || !addForm.password.trim()) {
       setAddError("Name, email, and password are required");
       return;
     }
-    const result = createUser({
+    const result = await createUser({
       name: addForm.name.trim(),
       email: addForm.email.trim(),
       password: addForm.password.trim(),
@@ -187,9 +194,9 @@ export default function EmployeesPage() {
     setEditOpen(true);
   }
 
-  function handleEditSave() {
+  async function handleEditSave() {
     if (!editTarget) return;
-    updateUser(editTarget.id, {
+    await updateUser(editTarget.id, {
       name: editForm.name.trim() || undefined,
       email: editForm.email.trim() || undefined,
       role: editForm.role,
@@ -200,17 +207,17 @@ export default function EmployeesPage() {
     setEditTarget(null);
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!editTarget) return;
-    deleteUser(editTarget.id);
+    await deleteUser(editTarget.id);
     setDeleteConfirm(false);
     setEditTarget(null);
   }
 
   // ── Team CRUD handlers ─────────────────────────────────────────────────
 
-  function handleTeamAdd() {
-    const result = createTeam(teamName);
+  async function handleTeamAdd() {
+    const result = await createTeam(teamName);
     if (!result.ok) { setTeamError(result.error ?? "Failed"); return; }
     setTeamName("");
     setTeamError("");
@@ -224,18 +231,18 @@ export default function EmployeesPage() {
     setTeamEditOpen(true);
   }
 
-  function handleTeamEditSave() {
+  async function handleTeamEditSave() {
     if (!teamEditTarget) return;
-    const result = updateTeam(teamEditTarget.id, teamName);
+    const result = await updateTeam(teamEditTarget.id, teamName);
     if (!result.ok) { setTeamError(result.error ?? "Failed"); return; }
     setTeamEditOpen(false);
     setTeamEditTarget(null);
     setTeamName("");
   }
 
-  function handleTeamDelete() {
+  async function handleTeamDelete() {
     if (!teamEditTarget) return;
-    deleteTeam(teamEditTarget.id);
+    await deleteTeam(teamEditTarget.id);
     setTeamDeleteConfirm(false);
     setTeamEditTarget(null);
   }
@@ -296,6 +303,9 @@ export default function EmployeesPage() {
             </div>
             {isAdmin && (
               <>
+                <button onClick={() => setImportOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
+                  ↑ Import <span className="text-[10px] text-green-400 ml-1">EMPLOYEES IMPORT LIVE</span>
+                </button>
                 <button onClick={() => { setTeamName(""); setTeamError(""); setTeamAddOpen(true); }} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
                   + Team
                 </button>
@@ -651,6 +661,20 @@ export default function EmployeesPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {importOpen && (
+        <ImportModal
+          config={employeeImportConfig({
+            existing: allUsers,
+            teams,
+            onAdd: createUser,
+            onUpdate: updateUser,
+            onBulkBatch: dbBulkCreateEmployees,
+            bulkApiRoute: "/api/import/employees",
+          })}
+          onClose={() => { setImportOpen(false); refreshUsers(); }}
+        />
       )}
     </div>
   );

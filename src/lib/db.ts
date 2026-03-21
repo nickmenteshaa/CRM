@@ -10,7 +10,7 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient; __pris
 
 // Bumped when schema changes so the dev-mode singleton is recreated.
 // Increment this value after running `prisma generate` with new models.
-const SCHEMA_VERSION = "7"; // bumped for ChatMessage replyTo field
+const SCHEMA_VERSION = "8"; // bumped for Employee + EmployeeTeam models
 
 function createPrismaClient() {
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });

@@ -236,6 +236,9 @@ model Inventory {
   updatedAt        DateTime  @updatedAt
 
   @@unique([partId, warehouseId])
+  @@index([partId])
+  @@index([warehouseId])
+  @@index([quantityOnHand])
 }
 
 // ── Supplier ─────────────────────────────────────────────────────────────────
@@ -256,6 +259,11 @@ model Supplier {
   updatedAt    DateTime @updatedAt
 
   supplierParts SupplierPart[]
+
+  @@index([name])
+  @@index([country])
+  @@index([isActive])
+  @@index([rating])
 }
 
 // ── SupplierPart (which supplier sells which part at what cost) ──────────────
@@ -335,4 +343,35 @@ model ChatReaction {
 
   @@unique([messageId, userId, emoji])            // one reaction per user per emoji per message
   @@index([messageId])
+}
+
+// ── Employee Team ───────────────────────────────────────────────────────────
+model EmployeeTeam {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  employees Employee[]
+}
+
+// ── Employee ────────────────────────────────────────────────────────────────
+model Employee {
+  id         String        @id @default(cuid())
+  name       String
+  email      String        @unique
+  password   String        @default("changeme123")
+  role       String        @default("sales_rep")    // admin, manager, senior_rep, sales_rep
+  teamId     String?
+  team       EmployeeTeam? @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  region     String?
+  managerId  String?                                 // self-referencing employee ID
+  isActive   Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([email])
+  @@index([role])
+  @@index([teamId])
+  @@index([isActive])
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import PageLoading from "@/components/PageLoading";
@@ -10,12 +10,15 @@ import { useAuth } from "@/context/AuthContext";
 import ImportModal from "@/components/ImportModal";
 import { supplierImportConfig } from "@/lib/import-configs";
 import {
-  dbGetSparePartsData,
+  dbGetSuppliersPaginated,
+  dbGetSuppliersFilterOptions,
+  dbBulkCreateSuppliers,
   dbCreateSupplier,
   dbUpdateSupplier,
   dbDeleteSupplier,
   dbCreateSupplierPart,
   dbDeleteSupplierPart,
+  dbGetSparePartsData,
 } from "@/lib/actions-spare-parts";
 
 // ── Reusable form inputs ────────────────────────────────────────────────────
@@ -58,7 +61,7 @@ function LabeledSelect({ label, value, onChange, options }: {
 
 // ── Sort ────────────────────────────────────────────────────────────────────
 
-type SortKey = "name" | "leadTimeDays" | "rating";
+type SortKey = "name" | "leadTimeDays" | "rating" | "country" | "createdAt";
 type SortDir = "asc" | "desc";
 
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: {
@@ -125,140 +128,143 @@ const emptyLinkForm = {
   partId: "", costPrice: "", leadTimeDays: "", moq: "", supplierSku: "",
 };
 
+const PAGE_SIZE = 50;
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function SuppliersPage() {
   const { isAdmin } = useAuth();
+
+  // ── Server-side paginated data ──
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loaded, setLoaded] = useState(false);
+  const [fetching, setFetching] = useState(false);
+
+  // ── Filter options (fetched once) ──
+  const [filterCountries, setFilterCountries] = useState<string[]>([]);
+
+  // ── Detail panel data (loaded on demand) ──
   const [supplierParts, setSupplierParts] = useState<SupplierPart[]>([]);
   const [allParts, setAllParts] = useState<Part[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [detailLoaded, setDetailLoaded] = useState(false);
 
-  // UI state
+  // ── UI state ──
   const [selected, setSelected] = useState<Supplier | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // Filters
+  // ── Filters ──
   const [filterCountry, setFilterCountry] = useState("all");
   const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
   const [filterRating, setFilterRating] = useState("all");
 
-  // Modals
+  // ── Modals ──
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [linkPartOpen, setLinkPartOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
-  // Forms
+  // ── Forms ──
   const [addForm, setAddForm] = useState<FormState>(emptyForm);
   const [editForm, setEditForm] = useState<FormState & { id?: string }>(emptyForm);
   const [linkForm, setLinkForm] = useState(emptyLinkForm);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [importOpen, setImportOpen] = useState(false);
 
-  // ── Load data ──────────────────────────────────────────────────────────
+  // ── Debounce search ──
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    debounceRef.current = setTimeout(() => setDebouncedQuery(query), 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
 
-  const loadData = useCallback(async () => {
-    try {
-      const data = await dbGetSparePartsData();
-      setSuppliers(data.suppliers ?? []);
-      setSupplierParts(data.supplierParts ?? []);
-      setAllParts(data.parts ?? []);
-    } catch (err) {
-      console.error("[SuppliersPage] load failed:", err);
-    } finally {
-      setLoaded(true);
-    }
+  // ── Reset page on filter change ──
+  useEffect(() => { setPage(1); }, [debouncedQuery, filterCountry, filterActive, filterRating]);
+
+  // ── Fetch filter options once ──
+  useEffect(() => {
+    dbGetSuppliersFilterOptions().then((opts) => {
+      setFilterCountries(opts.countries);
+    });
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // ── Fetch paginated suppliers ──
+  const fetchPage = useCallback(async () => {
+    setFetching(true);
+    try {
+      const result = await dbGetSuppliersPaginated({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery || undefined,
+        country: filterCountry !== "all" ? filterCountry : undefined,
+        rating: filterRating !== "all" ? filterRating : undefined,
+        isActive: filterActive,
+        sortKey: sortKey ?? "createdAt",
+        sortDir,
+      });
+      setSuppliers(result.suppliers);
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error("[SuppliersPage] fetch failed:", err);
+    } finally {
+      setFetching(false);
+      setLoaded(true);
+    }
+  }, [page, debouncedQuery, filterCountry, filterActive, filterRating, sortKey, sortDir]);
 
-  // ── Derived ────────────────────────────────────────────────────────────
+  useEffect(() => { fetchPage(); }, [fetchPage]);
 
-  const countries = useMemo(() => {
-    const set = new Set(suppliers.map((s) => s.country).filter(Boolean) as string[]);
-    return Array.from(set).sort();
-  }, [suppliers]);
+  // ── Load detail data (parts + supplier parts) only when detail panel opens ──
+  const loadDetailData = useCallback(async () => {
+    if (detailLoaded) return;
+    try {
+      const data = await dbGetSparePartsData();
+      setSupplierParts(data.supplierParts ?? []);
+      setAllParts(data.parts ?? []);
+      setDetailLoaded(true);
+    } catch (err) {
+      console.error("[SuppliersPage] detail load failed:", err);
+    }
+  }, [detailLoaded]);
 
+  // ── Derived ──
   const partMap = useMemo(() => {
     const m: Record<string, Part> = {};
     for (const p of allParts) m[p.id] = p;
     return m;
   }, [allParts]);
 
-  // Parts linked to the selected supplier
   const linkedParts = useMemo(() => {
     if (!selected) return [];
     return supplierParts.filter((sp) => sp.supplierId === selected.id);
   }, [selected, supplierParts]);
 
-  // Parts available to link (not already linked)
   const availableParts = useMemo(() => {
     if (!selected) return [];
     const linkedIds = new Set(linkedParts.map((lp) => lp.partId));
     return allParts.filter((p) => !linkedIds.has(p.id));
   }, [selected, linkedParts, allParts]);
 
-  // ── Search + Filter + Sort ─────────────────────────────────────────────
-
-  const filtered = useMemo(() => {
-    let result = [...suppliers];
-
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      result = result.filter((s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.country ?? "").toLowerCase().includes(q) ||
-        (s.email ?? "").toLowerCase().includes(q)
-      );
-    }
-
-    if (filterCountry !== "all") {
-      result = result.filter((s) => s.country === filterCountry);
-    }
-    if (filterActive === "active") result = result.filter((s) => s.isActive !== false);
-    if (filterActive === "inactive") result = result.filter((s) => s.isActive === false);
-    if (filterRating !== "all") {
-      const min = Number(filterRating);
-      result = result.filter((s) => (s.rating ?? 0) >= min);
-    }
-
-    if (sortKey) {
-      result.sort((a, b) => {
-        let av: string | number;
-        let bv: string | number;
-        if (sortKey === "leadTimeDays" || sortKey === "rating") {
-          av = a[sortKey] ?? 0;
-          bv = b[sortKey] ?? 0;
-        } else {
-          av = String(a[sortKey] ?? "").toLowerCase();
-          bv = String(b[sortKey] ?? "").toLowerCase();
-        }
-        if (av < bv) return sortDir === "asc" ? -1 : 1;
-        if (av > bv) return sortDir === "asc" ? 1 : -1;
-        return 0;
-      });
-    }
-
-    return result;
-  }, [suppliers, query, filterCountry, filterActive, filterRating, sortKey, sortDir]);
-
+  // ── Sort handler ──
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   }
 
-  // ── CRUD handlers ──────────────────────────────────────────────────────
-
+  // ── CRUD handlers ──
   async function handleAdd() {
     const errors: Record<string, string> = {};
     if (!addForm.name.trim()) errors.name = "Name is required";
     if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
     setFormErrors({});
 
-    const created = await dbCreateSupplier({
+    await dbCreateSupplier({
       name: addForm.name.trim(),
       contactName: addForm.contactName || undefined,
       email: addForm.email || undefined,
@@ -271,9 +277,9 @@ export default function SuppliersPage() {
       notes: addForm.notes || undefined,
       isActive: addForm.isActive,
     });
-    setSuppliers((prev) => [created, ...prev]);
     setAddForm(emptyForm);
     setAddOpen(false);
+    fetchPage(); // reload current page
   }
 
   function openEdit(supplier: Supplier) {
@@ -317,14 +323,13 @@ export default function SuppliersPage() {
   async function handleDelete() {
     if (!selected) return;
     await dbDeleteSupplier(selected.id);
-    setSuppliers((prev) => prev.filter((s) => s.id !== selected.id));
     setSupplierParts((prev) => prev.filter((sp) => sp.supplierId !== selected.id));
     setSelected(null);
     setDeleteConfirm(false);
+    fetchPage();
   }
 
-  // ── Link Part handlers ─────────────────────────────────────────────────
-
+  // ── Link Part handlers ──
   async function handleLinkPart() {
     if (!selected || !linkForm.partId) return;
     const created = await dbCreateSupplierPart({
@@ -345,16 +350,19 @@ export default function SuppliersPage() {
     setSupplierParts((prev) => prev.filter((sp) => sp.id !== spId));
   }
 
-  // ── Detail ─────────────────────────────────────────────────────────────
-
+  // ── Detail panel ──
   const currentSupplier = selected ? suppliers.find((s) => s.id === selected.id) ?? selected : null;
 
   function openDetailPanel(supplier: Supplier) {
-    setSelected(supplier.id === selected?.id ? null : supplier);
+    if (supplier.id === selected?.id) {
+      setSelected(null);
+    } else {
+      setSelected(supplier);
+      loadDetailData();
+    }
   }
 
-  // ── Supplier form fields ───────────────────────────────────────────────
-
+  // ── Supplier form fields ──
   function SupplierFormFields({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
     return (
       <div className="space-y-4">
@@ -407,8 +415,7 @@ export default function SuppliersPage() {
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────
-
+  // ── Render ──
   return (
     <div className="min-h-screen bg-[#0B0F14]">
       <Sidebar />
@@ -420,7 +427,10 @@ export default function SuppliersPage() {
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-[#F9FAFB]">Suppliers</h2>
-                <p className="text-sm text-[#9CA3AF] mt-1">{filtered.length} of {suppliers.length} suppliers</p>
+                <p className="text-sm text-[#9CA3AF] mt-1">
+                  {total.toLocaleString()} total suppliers
+                  {fetching && <span className="ml-2 text-blue-400 animate-pulse">Loading...</span>}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 {isAdmin && (
@@ -440,7 +450,7 @@ export default function SuppliersPage() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm select-none">⌕</span>
                 <input
                   className="w-full border border-[#1F2937] bg-[#0F172A] rounded-lg pl-8 pr-8 py-2 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-600"
-                  placeholder="Search by name, country, or email..."
+                  placeholder="Search by name, contact, email, or phone..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -454,7 +464,7 @@ export default function SuppliersPage() {
             <div className="flex flex-wrap items-center gap-2 mb-5">
               <select value={filterCountry} onChange={(e) => setFilterCountry(e.target.value)} className="text-sm border border-[#1F2937] bg-[#111827] text-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="all">All Countries</option>
-                {countries.map((c) => <option key={c} value={c}>{c}</option>)}
+                {filterCountries.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
 
               <select value={filterActive} onChange={(e) => setFilterActive(e.target.value as "all" | "active" | "inactive")} className="text-sm border border-[#1F2937] bg-[#111827] text-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -495,7 +505,7 @@ export default function SuppliersPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1F2937]">
-                    {filtered.length === 0 ? (
+                    {suppliers.length === 0 ? (
                       <tr>
                         <td colSpan={7}>
                           <EmptyState
@@ -506,7 +516,7 @@ export default function SuppliersPage() {
                           />
                         </td>
                       </tr>
-                    ) : filtered.map((supplier) => (
+                    ) : suppliers.map((supplier) => (
                       <tr
                         key={supplier.id}
                         onClick={() => openDetailPanel(supplier)}
@@ -536,6 +546,22 @@ export default function SuppliersPage() {
                 </table>
               </div>
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 px-1">
+                <p className="text-xs text-gray-500">
+                  Page {page} of {totalPages} · Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button disabled={page <= 1} onClick={() => setPage(1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">«</button>
+                  <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">‹</button>
+                  <span className="px-3 py-1 text-xs text-gray-300">{page}</span>
+                  <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">›</button>
+                  <button disabled={page >= totalPages} onClick={() => setPage(totalPages)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">»</button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -615,7 +641,7 @@ export default function SuppliersPage() {
               </div>
 
               {linkedParts.length === 0 ? (
-                <p className="text-xs text-gray-500 italic">No parts linked to this supplier yet.</p>
+                <p className="text-xs text-gray-500 italic">{detailLoaded ? "No parts linked to this supplier yet." : "Loading linked parts..."}</p>
               ) : (
                 <ul className="space-y-2">
                   {linkedParts.map((sp) => {
@@ -708,18 +734,12 @@ export default function SuppliersPage() {
         <ImportModal
           config={supplierImportConfig({
             existing: suppliers,
-            onAdd: async (record) => {
-              const created = await dbCreateSupplier(record);
-              setSuppliers((prev) => [created, ...prev]);
-              return created;
-            },
-            onUpdate: async (id, updates) => {
-              const updated = await dbUpdateSupplier(id, updates);
-              setSuppliers((prev) => prev.map((s) => (s.id === id ? updated : s)));
-              return updated;
-            },
+            onAdd: dbCreateSupplier,
+            onUpdate: dbUpdateSupplier,
+            onBulkBatch: dbBulkCreateSuppliers,
+            bulkApiRoute: "/api/import/suppliers",
           })}
-          onClose={() => setImportOpen(false)}
+          onClose={() => { setImportOpen(false); fetchPage(); }}
         />
       )}
     </div>

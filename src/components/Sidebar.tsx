@@ -63,12 +63,12 @@ export default function Sidebar() {
     router.push("/login");
   }
 
-  const initials = user?.name
+  const initials = (user?.name ?? "?")
     .split(" ")
     .map((n) => n[0])
     .join("")
     .slice(0, 2)
-    .toUpperCase() ?? "?";
+    .toUpperCase() || "?";
 
   return (
     <>

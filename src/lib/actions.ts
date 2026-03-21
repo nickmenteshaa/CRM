@@ -529,6 +529,69 @@ export async function dbDeleteDeal(id: string): Promise<void> {
   await prisma.deal.delete({ where: { id } });
 }
 
+/**
+ * Bulk create deals/orders via createMany with sub-batching and retry logic.
+ * orderNumber must be pre-assigned by the caller for each record.
+ */
+export async function dbBulkCreateDeals(
+  records: Omit<Deal, "id">[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  const SUB_BATCH = 50;
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.deal.createMany({
+          data: chunk.map((d) => ({
+            name: d.name,
+            contact: d.contact,
+            value: d.value,
+            stage: d.stage,
+            close: d.close || null,
+            leadId: d.leadId || null,
+            leadName: d.leadName || null,
+            owner: d.owner || null,
+            ownerId: d.ownerId || null,
+            won: d.won ?? false,
+            lost: d.lost ?? false,
+            orderNumber: d.orderNumber || null,
+            orderStatus: d.orderStatus || "New",
+            shippingMethod: d.shippingMethod || null,
+            shippingCost: d.shippingCost || null,
+            taxAmount: d.taxAmount || null,
+            subtotal: d.subtotal || null,
+            grandTotal: d.grandTotal || null,
+            notes: d.notes || null,
+            isQuote: false,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          return {
+            created: totalCreated,
+            skipped: totalSkipped,
+            error: `Failed at rows ${i + 1}–${Math.min(i + SUB_BATCH, records.length)}: ${msg}`,
+          };
+        }
+      }
+    }
+  }
+
+  return { created: totalCreated, skipped: totalSkipped };
+}
+
 export async function dbReserveStockForOrder(
   dealId: string
 ): Promise<{ reserved: number; failed: number }> {

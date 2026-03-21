@@ -6,14 +6,17 @@ import Modal from "@/components/Modal";
 import SearchFilter from "@/components/SearchFilter";
 import PageLoading from "@/components/PageLoading";
 import EmptyState from "@/components/EmptyState";
-import { useApp, type Deal, type Part, type OrderLine, type Message } from "@/context/AppContext";
+import { useApp, type Deal, type Part, type OrderLine, type Lead, type Message } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import ChatPanel from "@/components/ChatPanel";
+import ImportModal from "@/components/ImportModal";
+import { orderImportConfig, orderItemImportConfig } from "@/lib/import-configs";
 import {
   dbGetSparePartsData,
   dbCreateOrderLine, dbUpdateOrderLine, dbDeleteOrderLine,
+  dbBulkCreateOrderLines,
 } from "@/lib/actions-spare-parts";
-import { dbReserveStockForOrder } from "@/lib/actions";
+import { dbReserveStockForOrder, dbBulkCreateDeals } from "@/lib/actions";
 
 const FIELDS = [
   { key: "name",         label: "Order Name" },
@@ -109,7 +112,7 @@ function LabeledSelect({ label, value, onChange, options }: { label: string; val
 }
 
 export default function DealsPage() {
-  const { deals, addDeal, updateDeal, deleteDeal, messages, addMessage, loaded } = useApp();
+  const { deals, addDeal, updateDeal, deleteDeal, messages, addMessage, loaded, allLeads } = useApp();
   const { isAdmin, user, allUsers, canAccessOwnerId } = useAuth();
 
   function canEditDeal(deal: Deal) {
@@ -139,6 +142,10 @@ export default function DealsPage() {
 
   // Reserve stock feedback
   const [reserveMsg, setReserveMsg] = useState<string | null>(null);
+
+  // Import
+  const [importOrdersOpen, setImportOrdersOpen] = useState(false);
+  const [importItemsOpen, setImportItemsOpen] = useState(false);
 
   // Chat
   const [dealTab, setDealTab] = useState<"details" | "chat">("details");
@@ -370,7 +377,19 @@ export default function DealsPage() {
             <h2 className="text-2xl font-bold text-[#F9FAFB]">Orders</h2>
             <p className="text-sm text-[#9CA3AF] mt-1">{filtered.length} of {deals.length} orders · Total value: {fmtMoney(totalValue)}</p>
           </div>
-          <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all shadow-sm">+ New Order</button>
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <>
+                <button onClick={() => setImportOrdersOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
+                  ↑ Import Orders
+                </button>
+                <button onClick={() => setImportItemsOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
+                  ↑ Import Items
+                </button>
+              </>
+            )}
+            <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all shadow-sm">+ New Order</button>
+          </div>
         </div>
 
         <SearchFilter query={query} onQueryChange={setQuery} fields={FIELDS} activeFields={activeFields} onFieldsChange={setActiveFields} placeholder="Search orders..." />
@@ -798,6 +817,48 @@ export default function DealsPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {importOrdersOpen && (
+        <ImportModal
+          config={orderImportConfig({
+            existing: deals,
+            customers: allLeads,
+            employees: allUsers.map((u) => ({ id: u.id, name: u.name, email: u.email })),
+            onAdd: addDeal,
+            onUpdate: updateDeal,
+            onBulkBatch: dbBulkCreateDeals,
+            bulkApiRoute: "/api/import/orders",
+          })}
+          onClose={() => setImportOrdersOpen(false)}
+        />
+      )}
+
+      {importItemsOpen && (
+        <ImportModal
+          config={orderItemImportConfig({
+            existing: orderLines.map((ol) => {
+              const deal = deals.find((d) => d.id === ol.dealId);
+              const part = parts.find((p) => p.id === ol.partId);
+              return { ...ol, orderNumber: deal?.orderNumber, sku: part?.sku };
+            }),
+            orders: deals,
+            parts,
+            onAdd: async (data) => {
+              const created = await dbCreateOrderLine(data);
+              setOrderLines((prev) => [...prev, created]);
+              return created;
+            },
+            onUpdate: async (id, data) => {
+              const updated = await dbUpdateOrderLine(id, data as Partial<OrderLine>);
+              setOrderLines((prev) => prev.map((ol) => (ol.id === id ? updated : ol)));
+              return updated;
+            },
+            onBulkBatch: dbBulkCreateOrderLines,
+            bulkApiRoute: "/api/import/order-items",
+          })}
+          onClose={() => setImportItemsOpen(false)}
+        />
       )}
     </div>
   );

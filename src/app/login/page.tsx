@@ -27,20 +27,18 @@ function LoginForm() {
     if (user) router.replace(searchParams.get("from") ?? "/");
   }, [user, router, searchParams]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const result = login(email, password);
+    const result = await login(email, password);
     if (!result.ok) {
       setLoading(false);
       setError(result.error ?? "Login failed");
     } else {
       // Cookie is already set synchronously by login().
       // Use window.location for a full page navigation so the middleware
-      // sees the fresh cookie. router.replace can race with middleware
-      // on Vercel production because Next.js client-side navigation
-      // may prefetch the target route before the cookie is visible.
+      // sees the fresh cookie.
       const dest = searchParams.get("from") ?? "/";
       window.location.href = dest;
     }

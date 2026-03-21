@@ -386,7 +386,6 @@ export default function ImportModal<T extends { id: string }>({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
-          <p className="text-xs font-bold text-red-500 bg-red-900/30 px-2 py-1 rounded mb-2">IMPORT MODAL BUILD MARKER 1</p>
           {/* ── Step: Upload ──────────────────────────────────────────────── */}
           {step === "upload" && (
             <div className="space-y-6">
@@ -625,7 +624,6 @@ export default function ImportModal<T extends { id: string }>({
           {step === "importing" && (
             <div className="space-y-4 py-4">
               {/* Debug marker */}
-              <p className="text-center text-xs font-bold text-red-500 bg-red-900/30 rounded-lg py-1">IMPORT PROGRESS BUILD MARKER 1</p>
               <p className="text-center text-xs font-bold text-green-400 bg-green-900/20 rounded-lg py-1">PROGRESS UI ACTIVE — {Math.floor((progress.processedRows / (progress.totalRows || 1)) * 100)}% — {progress.processedRows.toLocaleString()}/{progress.totalRows.toLocaleString()} rows — batch {progress.batchNum}/{progress.totalBatches}</p>
               {/* File info */}
               <div className="flex items-center gap-2 px-1">

@@ -1,29 +1,34 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import PageLoading from "@/components/PageLoading";
 import EmptyState from "@/components/EmptyState";
 import type { InventoryItem, Part, Warehouse, SupplierPart, Supplier } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import ImportModal from "@/components/ImportModal";
+import { inventoryImportConfig } from "@/lib/import-configs";
 import {
-  dbGetSparePartsData,
+  dbGetInventoryPaginated,
+  dbGetInventoryFilterOptions,
+  dbBulkCreateInventory,
   dbCreateInventory,
   dbUpdateInventory,
   dbDeleteInventory,
   dbCreateWarehouse,
+  dbGetSparePartsData,
 } from "@/lib/actions-spare-parts";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function availableQty(item: InventoryItem): number {
+function availableQty(item: { quantityOnHand: number; quantityReserved: number }): number {
   return item.quantityOnHand - item.quantityReserved;
 }
 
 type StockStatus = "In Stock" | "Low Stock" | "Out of Stock";
 
-function stockStatus(item: InventoryItem): StockStatus {
+function stockStatus(item: { quantityOnHand: number; quantityReserved: number; reorderPoint: number }): StockStatus {
   const avail = availableQty(item);
   if (avail <= 0) return "Out of Stock";
   if (item.reorderPoint > 0 && item.quantityOnHand <= item.reorderPoint) return "Low Stock";
@@ -77,7 +82,7 @@ function LabeledSelect({ label, value, onChange, options }: {
 
 // ── Sort ────────────────────────────────────────────────────────────────────
 
-type SortKey = "partName" | "sku" | "quantityOnHand" | "available" | "reorderPoint";
+type SortKey = "partName" | "sku" | "quantityOnHand" | "reorderPoint" | "warehouseName" | "createdAt";
 type SortDir = "asc" | "desc";
 
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: {
@@ -104,66 +109,126 @@ type EnrichedRow = InventoryItem & {
   status: StockStatus;
 };
 
+const PAGE_SIZE = 50;
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
   const { isAdmin } = useAuth();
-  const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [parts, setParts] = useState<Part[]>([]);
+
+  // ── Server-side paginated data ──
+  const [items, setItems] = useState<EnrichedRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loaded, setLoaded] = useState(false);
+  const [fetching, setFetching] = useState(false);
+
+  // ── Filter options (fetched once) ──
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+
+  // ── Detail panel extra data (loaded on demand) ──
+  const [allParts, setAllParts] = useState<Part[]>([]);
   const [supplierParts, setSupplierParts] = useState<SupplierPart[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [detailLoaded, setDetailLoaded] = useState(false);
 
-  // UI
+  // ── UI ──
   const [selected, setSelected] = useState<EnrichedRow | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // Filters
+  // ── Filters ──
   const [filterWarehouse, setFilterWarehouse] = useState("all");
-  const [filterStatus, setFilterStatus] = useState<"all" | "In Stock" | "Low Stock" | "Out of Stock">("all");
-  const [filterLowOnly, setFilterLowOnly] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<"all" | "instock" | "low" | "out">("all");
 
-  // Modals
+  // ── Modals ──
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [warehouseOpen, setWarehouseOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
-  // Forms
+  // ── Forms ──
   const [addForm, setAddForm] = useState({ partId: "", warehouseId: "", quantityOnHand: "", quantityReserved: "0", reorderPoint: "", binLocation: "" });
   const [editForm, setEditForm] = useState({ id: "", quantityOnHand: "", quantityReserved: "", reorderPoint: "", binLocation: "" });
   const [whForm, setWhForm] = useState({ name: "", address: "", city: "", country: "" });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // ── Load ───────────────────────────────────────────────────────────────
+  // ── Debounce search ──
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    debounceRef.current = setTimeout(() => setDebouncedQuery(query), 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
 
-  const loadData = useCallback(async () => {
-    try {
-      const data = await dbGetSparePartsData();
-      setInventory(data.inventory ?? []);
-      setParts(data.parts ?? []);
-      setWarehouses(data.warehouses ?? []);
-      setSupplierParts(data.supplierParts ?? []);
-      setSuppliers(data.suppliers ?? []);
-    } catch (err) {
-      console.error("[InventoryPage] load failed:", err);
-    } finally {
-      setLoaded(true);
-    }
+  // ── Reset page on filter change ──
+  useEffect(() => { setPage(1); }, [debouncedQuery, filterWarehouse, filterStatus]);
+
+  // ── Fetch filter options once ──
+  useEffect(() => {
+    dbGetInventoryFilterOptions().then((opts) => {
+      setWarehouses(opts.warehouses);
+    });
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // ── Fetch paginated inventory ──
+  const fetchPage = useCallback(async () => {
+    setFetching(true);
+    try {
+      const result = await dbGetInventoryPaginated({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery || undefined,
+        warehouseId: filterWarehouse !== "all" ? filterWarehouse : undefined,
+        stockStatus: filterStatus,
+        sortKey: sortKey ?? "createdAt",
+        sortDir,
+      });
 
-  // ── Lookup maps ────────────────────────────────────────────────────────
+      const enriched: EnrichedRow[] = result.items.map((item) => ({
+        ...item,
+        available: availableQty(item),
+        status: stockStatus(item),
+      }));
 
+      setItems(enriched);
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error("[InventoryPage] fetch failed:", err);
+    } finally {
+      setFetching(false);
+      setLoaded(true);
+    }
+  }, [page, debouncedQuery, filterWarehouse, filterStatus, sortKey, sortDir]);
+
+  useEffect(() => { fetchPage(); }, [fetchPage]);
+
+  // ── Load detail data on demand ──
+  const loadDetailData = useCallback(async () => {
+    if (detailLoaded) return;
+    try {
+      const data = await dbGetSparePartsData();
+      setAllParts(data.parts ?? []);
+      setSupplierParts(data.supplierParts ?? []);
+      setSuppliers(data.suppliers ?? []);
+      // Also update warehouses in case new ones were added
+      setWarehouses(data.warehouses ?? []);
+      setDetailLoaded(true);
+    } catch (err) {
+      console.error("[InventoryPage] detail load failed:", err);
+    }
+  }, [detailLoaded]);
+
+  // ── Lookup maps ──
   const partMap = useMemo(() => {
     const m: Record<string, Part> = {};
-    for (const p of parts) m[p.id] = p;
+    for (const p of allParts) m[p.id] = p;
     return m;
-  }, [parts]);
+  }, [allParts]);
 
   const warehouseMap = useMemo(() => {
     const m: Record<string, Warehouse> = {};
@@ -177,7 +242,6 @@ export default function InventoryPage() {
     return m;
   }, [suppliers]);
 
-  // Suppliers for a given part
   function suppliersForPart(partId: string) {
     return supplierParts
       .filter((sp) => sp.partId === partId)
@@ -185,98 +249,30 @@ export default function InventoryPage() {
       .filter((sp) => sp.supplier);
   }
 
-  // ── Enriched rows ─────────────────────────────────────────────────────
+  // ── KPI counts (from current page total — lightweight) ──
+  const kpis = useMemo(() => {
+    const low = items.filter((r) => r.status === "Low Stock").length;
+    const out = items.filter((r) => r.status === "Out of Stock").length;
+    const totalOnHand = items.reduce((sum, r) => sum + r.quantityOnHand, 0);
+    return { total, low, out, totalOnHand };
+  }, [items, total]);
 
-  const enriched: EnrichedRow[] = useMemo(() => {
-    return inventory.map((item) => {
-      const part = partMap[item.partId];
-      const wh = warehouseMap[item.warehouseId];
-      return {
-        ...item,
-        partName: part?.name ?? "Unknown Part",
-        sku: part?.sku ?? "—",
-        warehouseName: wh?.name ?? "Unknown",
-        available: availableQty(item),
-        status: stockStatus(item),
-      };
-    });
-  }, [inventory, partMap, warehouseMap]);
-
-  // ── Search + Filter + Sort ─────────────────────────────────────────────
-
-  const filtered = useMemo(() => {
-    let result = [...enriched];
-
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      result = result.filter((r) =>
-        r.partName.toLowerCase().includes(q) ||
-        r.sku.toLowerCase().includes(q) ||
-        r.warehouseName.toLowerCase().includes(q)
-      );
-    }
-
-    if (filterWarehouse !== "all") {
-      result = result.filter((r) => r.warehouseId === filterWarehouse);
-    }
-    if (filterStatus !== "all") {
-      result = result.filter((r) => r.status === filterStatus);
-    }
-    if (filterLowOnly) {
-      result = result.filter((r) => r.status === "Low Stock" || r.status === "Out of Stock");
-    }
-
-    if (sortKey) {
-      result.sort((a, b) => {
-        let av: string | number;
-        let bv: string | number;
-        if (sortKey === "partName" || sortKey === "sku") {
-          av = a[sortKey].toLowerCase();
-          bv = b[sortKey].toLowerCase();
-        } else {
-          av = a[sortKey];
-          bv = b[sortKey];
-        }
-        if (av < bv) return sortDir === "asc" ? -1 : 1;
-        if (av > bv) return sortDir === "asc" ? 1 : -1;
-        return 0;
-      });
-    }
-
-    return result;
-  }, [enriched, query, filterWarehouse, filterStatus, filterLowOnly, sortKey, sortDir]);
-
+  // ── Sort handler ──
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   }
 
-  // ── KPI counts ─────────────────────────────────────────────────────────
-
-  const kpis = useMemo(() => {
-    const total = enriched.length;
-    const low = enriched.filter((r) => r.status === "Low Stock").length;
-    const out = enriched.filter((r) => r.status === "Out of Stock").length;
-    const totalOnHand = enriched.reduce((sum, r) => sum + r.quantityOnHand, 0);
-    return { total, low, out, totalOnHand };
-  }, [enriched]);
-
-  // ── CRUD ───────────────────────────────────────────────────────────────
-
+  // ── CRUD ──
   async function handleAdd() {
     const errors: Record<string, string> = {};
     if (!addForm.partId) errors.partId = "Select a part";
     if (!addForm.warehouseId) errors.warehouseId = "Select a warehouse";
     if (!addForm.quantityOnHand) errors.quantityOnHand = "Required";
-    // Check duplicate part+warehouse
-    if (addForm.partId && addForm.warehouseId) {
-      const exists = inventory.some((i) => i.partId === addForm.partId && i.warehouseId === addForm.warehouseId);
-      if (exists) errors.partId = "This part already has an inventory record in this warehouse";
-    }
     if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
     setFormErrors({});
 
-    const created = await dbCreateInventory({
+    await dbCreateInventory({
       partId: addForm.partId,
       warehouseId: addForm.warehouseId,
       quantityOnHand: Number(addForm.quantityOnHand) || 0,
@@ -284,9 +280,9 @@ export default function InventoryPage() {
       reorderPoint: Number(addForm.reorderPoint) || 0,
       binLocation: addForm.binLocation || undefined,
     });
-    setInventory((prev) => [...prev, created]);
     setAddForm({ partId: "", warehouseId: "", quantityOnHand: "", quantityReserved: "0", reorderPoint: "", binLocation: "" });
     setAddOpen(false);
+    fetchPage();
   }
 
   function openEdit(row: EnrichedRow) {
@@ -302,29 +298,25 @@ export default function InventoryPage() {
 
   async function handleEditSave() {
     if (!editForm.id) return;
-    const updated = await dbUpdateInventory(editForm.id, {
+    await dbUpdateInventory(editForm.id, {
       quantityOnHand: Number(editForm.quantityOnHand) || 0,
       quantityReserved: Number(editForm.quantityReserved) || 0,
       reorderPoint: Number(editForm.reorderPoint) || 0,
       binLocation: editForm.binLocation || undefined,
     });
-    setInventory((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
-    if (selected?.id === updated.id) {
-      // Re-enrich after state update happens via enriched memo
-    }
     setEditOpen(false);
+    fetchPage();
   }
 
   async function handleDelete() {
     if (!selected) return;
     await dbDeleteInventory(selected.id);
-    setInventory((prev) => prev.filter((i) => i.id !== selected.id));
     setSelected(null);
     setDeleteConfirm(false);
+    fetchPage();
   }
 
-  // ── Warehouse creation ─────────────────────────────────────────────────
-
+  // ── Warehouse creation ──
   async function handleAddWarehouse() {
     if (!whForm.name.trim()) return;
     const created = await dbCreateWarehouse({
@@ -339,20 +331,19 @@ export default function InventoryPage() {
     setWarehouseOpen(false);
   }
 
-  // ── Detail ─────────────────────────────────────────────────────────────
-
-  // Keep detail in sync with enriched data
-  const currentRow = useMemo(() => {
-    if (!selected) return null;
-    return enriched.find((r) => r.id === selected.id) ?? null;
-  }, [selected, enriched]);
+  // ── Detail ──
+  const currentRow = selected ? items.find((r) => r.id === selected.id) ?? selected : null;
 
   function openDetailPanel(row: EnrichedRow) {
-    setSelected(row.id === selected?.id ? null : row);
+    if (row.id === selected?.id) {
+      setSelected(null);
+    } else {
+      setSelected(row);
+      loadDetailData();
+    }
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────
-
+  // ── Render ──
   return (
     <div className="min-h-screen bg-[#0B0F14]">
       <Sidebar />
@@ -364,13 +355,21 @@ export default function InventoryPage() {
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-[#F9FAFB]">Inventory</h2>
-                <p className="text-sm text-[#9CA3AF] mt-1">{filtered.length} of {enriched.length} records</p>
+                <p className="text-sm text-[#9CA3AF] mt-1">
+                  {total.toLocaleString()} total records
+                  {fetching && <span className="ml-2 text-blue-400 animate-pulse">Loading...</span>}
+                </p>
               </div>
               <div className="flex items-center gap-2">
+                {isAdmin && (
+                  <button onClick={() => setImportOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
+                    ↑ Import
+                  </button>
+                )}
                 <button onClick={() => setWarehouseOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-colors">
                   + Warehouse
                 </button>
-                <button onClick={() => { setAddForm({ partId: "", warehouseId: "", quantityOnHand: "", quantityReserved: "0", reorderPoint: "", binLocation: "" }); setFormErrors({}); setAddOpen(true); }} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all shadow-sm">
+                <button onClick={() => { setAddForm({ partId: "", warehouseId: "", quantityOnHand: "", quantityReserved: "0", reorderPoint: "", binLocation: "" }); setFormErrors({}); setAddOpen(true); loadDetailData(); }} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all shadow-sm">
                   + Add Inventory
                 </button>
               </div>
@@ -380,18 +379,18 @@ export default function InventoryPage() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className="bg-[#111827] border border-[#1F2937] rounded-xl px-4 py-3">
                 <p className="text-xs text-[#9CA3AF] uppercase tracking-wide">Total Records</p>
-                <p className="text-xl font-bold text-[#F9FAFB] mt-1">{kpis.total}</p>
+                <p className="text-xl font-bold text-[#F9FAFB] mt-1">{kpis.total.toLocaleString()}</p>
               </div>
               <div className="bg-[#111827] border border-[#1F2937] rounded-xl px-4 py-3">
-                <p className="text-xs text-[#9CA3AF] uppercase tracking-wide">Total On Hand</p>
+                <p className="text-xs text-[#9CA3AF] uppercase tracking-wide">On Hand (page)</p>
                 <p className="text-xl font-bold text-[#F9FAFB] mt-1">{kpis.totalOnHand.toLocaleString()}</p>
               </div>
               <div className={`border rounded-xl px-4 py-3 ${kpis.low > 0 ? "bg-amber-900/20 border-amber-800" : "bg-[#111827] border-[#1F2937]"}`}>
-                <p className={`text-xs uppercase tracking-wide ${kpis.low > 0 ? "text-amber-400" : "text-[#9CA3AF]"}`}>Low Stock</p>
+                <p className={`text-xs uppercase tracking-wide ${kpis.low > 0 ? "text-amber-400" : "text-[#9CA3AF]"}`}>Low Stock (page)</p>
                 <p className={`text-xl font-bold mt-1 ${kpis.low > 0 ? "text-amber-300" : "text-[#F9FAFB]"}`}>{kpis.low}</p>
               </div>
               <div className={`border rounded-xl px-4 py-3 ${kpis.out > 0 ? "bg-red-900/20 border-red-800" : "bg-[#111827] border-[#1F2937]"}`}>
-                <p className={`text-xs uppercase tracking-wide ${kpis.out > 0 ? "text-red-400" : "text-[#9CA3AF]"}`}>Out of Stock</p>
+                <p className={`text-xs uppercase tracking-wide ${kpis.out > 0 ? "text-red-400" : "text-[#9CA3AF]"}`}>Out of Stock (page)</p>
                 <p className={`text-xl font-bold mt-1 ${kpis.out > 0 ? "text-red-300" : "text-[#F9FAFB]"}`}>{kpis.out}</p>
               </div>
             </div>
@@ -402,7 +401,7 @@ export default function InventoryPage() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm select-none">⌕</span>
                 <input
                   className="w-full border border-[#1F2937] bg-[#0F172A] rounded-lg pl-8 pr-8 py-2 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-600"
-                  placeholder="Search by part name, SKU, or warehouse..."
+                  placeholder="Search by part name, SKU, warehouse, or bin..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -421,23 +420,13 @@ export default function InventoryPage() {
 
               <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)} className="text-sm border border-[#1F2937] bg-[#111827] text-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="all">All Status</option>
-                <option value="In Stock">In Stock</option>
-                <option value="Low Stock">Low Stock</option>
-                <option value="Out of Stock">Out of Stock</option>
+                <option value="instock">In Stock</option>
+                <option value="low">Low Stock</option>
+                <option value="out">Out of Stock</option>
               </select>
 
-              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer border border-[#1F2937] bg-[#111827] rounded-lg px-3 py-1.5">
-                <input
-                  type="checkbox"
-                  checked={filterLowOnly}
-                  onChange={(e) => setFilterLowOnly(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-gray-300 text-amber-500"
-                />
-                Low/Out only
-              </label>
-
-              {(filterWarehouse !== "all" || filterStatus !== "all" || filterLowOnly) && (
-                <button onClick={() => { setFilterWarehouse("all"); setFilterStatus("all"); setFilterLowOnly(false); }} className="text-xs text-blue-400 hover:text-blue-300 hover:underline">
+              {(filterWarehouse !== "all" || filterStatus !== "all") && (
+                <button onClick={() => { setFilterWarehouse("all"); setFilterStatus("all"); }} className="text-xs text-blue-400 hover:text-blue-300 hover:underline">
                   Clear filters
                 </button>
               )}
@@ -454,13 +443,13 @@ export default function InventoryPage() {
                       <th className="px-5 py-3 font-medium">Warehouse</th>
                       <SortHeader label="On Hand" sortKey="quantityOnHand" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
                       <th className="px-5 py-3 font-medium">Reserved</th>
-                      <SortHeader label="Available" sortKey="available" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                      <th className="px-5 py-3 font-medium">Available</th>
                       <SortHeader label="Reorder Pt" sortKey="reorderPoint" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
                       <th className="px-5 py-3 font-medium">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1F2937]">
-                    {filtered.length === 0 ? (
+                    {items.length === 0 ? (
                       <tr>
                         <td colSpan={8}>
                           <EmptyState
@@ -471,7 +460,7 @@ export default function InventoryPage() {
                           />
                         </td>
                       </tr>
-                    ) : filtered.map((row) => {
+                    ) : items.map((row) => {
                       const isLow = row.status === "Low Stock";
                       const isOut = row.status === "Out of Stock";
                       return (
@@ -504,6 +493,22 @@ export default function InventoryPage() {
                 </table>
               </div>
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 px-1">
+                <p className="text-xs text-gray-500">
+                  Page {page} of {totalPages} · Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button disabled={page <= 1} onClick={() => setPage(1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">«</button>
+                  <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">‹</button>
+                  <span className="px-3 py-1 text-xs text-gray-300">{page}</span>
+                  <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">›</button>
+                  <button disabled={page >= totalPages} onClick={() => setPage(totalPages)} className="px-2 py-1 text-xs rounded bg-[#1F2937] text-gray-400 disabled:opacity-30 hover:bg-[#374151]">»</button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
@@ -644,7 +649,7 @@ export default function InventoryPage() {
                 label="Part *"
                 value={addForm.partId}
                 onChange={(v) => { setAddForm({ ...addForm, partId: v }); setFormErrors((e) => { const { partId: _, ...rest } = e; return rest; }); }}
-                options={[{ value: "", label: "— Select a part —" }, ...parts.map((p) => ({ value: p.id, label: `${p.sku} — ${p.name}` }))]}
+                options={[{ value: "", label: "— Select a part —" }, ...allParts.map((p) => ({ value: p.id, label: `${p.sku} — ${p.name}` }))]}
               />
               {formErrors.partId && <p className="text-xs text-red-500 mt-1">{formErrors.partId}</p>}
             </div>
@@ -729,6 +734,24 @@ export default function InventoryPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* ── Import Modal ──────────────────────────────────────────────────── */}
+      {importOpen && (
+        <ImportModal
+          config={inventoryImportConfig({
+            existing: items,
+            warehouses,
+            onAdd: dbCreateInventory,
+            onUpdate: async (id, updates) => {
+              const updated = await dbUpdateInventory(id, updates);
+              return updated;
+            },
+            onBulkBatch: dbBulkCreateInventory,
+            bulkApiRoute: "/api/import/inventory",
+          })}
+          onClose={() => { setImportOpen(false); fetchPage(); }}
+        />
       )}
     </div>
   );
