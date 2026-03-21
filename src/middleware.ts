@@ -5,7 +5,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow login page and Next.js internal routes through
-  if (pathname.startsWith("/login") || pathname.startsWith("/_next") || pathname.startsWith("/favicon") || pathname.startsWith("/api/seed-employees")) {
+  if (pathname.startsWith("/login") || pathname.startsWith("/_next") || pathname.startsWith("/favicon") || pathname.startsWith("/api/seed-employees") || pathname.startsWith("/api/automation")) {
     return NextResponse.next();
   }
 
