@@ -6,7 +6,6 @@ import Modal from "@/components/Modal";
 import { useApp } from "@/context/AppContext";
 import { useAuth, ROLE_LABELS, type Role } from "@/context/AuthContext";
 import { useFontSize, type FontSize } from "@/context/FontSizeContext";
-import { dbResetAllBusinessData } from "@/lib/actions-reset";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -775,10 +774,8 @@ function UsersSection() {
 // ── Danger / Data section ──────────────────────────────────────────────────────
 
 function DangerSection() {
-  const { resetToSeedData, reloadFromDb } = useApp();
+  const { purgeAllData } = useApp();
   const { isAdmin } = useAuth();
-  const [confirmed, setConfirmed] = useState(false);
-  const [done, setDone] = useState(false);
 
   // Production reset state
   const [showPurgeModal, setShowPurgeModal] = useState(false);
@@ -787,27 +784,16 @@ function DangerSection() {
   const [purgeResult, setPurgeResult] = useState<{ ok: boolean; counts: Record<string, number> } | null>(null);
   const [purgeError, setPurgeError] = useState("");
 
-  function handleReset() {
-    resetToSeedData();
-    setConfirmed(false);
-    setDone(true);
-    setTimeout(() => setDone(false), 3000);
-  }
-
   async function handlePurge() {
     setPurging(true);
     setPurgeError("");
     try {
-      // Server action — runs on the server, deletes directly from Neon DB
-      const result = await dbResetAllBusinessData();
+      // Calls server action via AppContext (same path as all other working server actions)
+      const result = await purgeAllData();
       if (!result.ok) throw new Error("Server returned failure");
       setPurgeResult(result);
       setPurgeConfirmText("");
       setShowPurgeModal(false);
-      // Set production mode flag so auto-seeding is permanently disabled
-      localStorage.setItem("crm_production_mode", "1");
-      // Reload client state from the now-empty database (no re-seed)
-      await reloadFromDb();
     } catch (err) {
       setPurgeError(err instanceof Error ? err.message : "Reset failed. Please try again.");
     } finally {
@@ -930,29 +916,6 @@ function DangerSection() {
         </div>
       )}
 
-      {/* Legacy: Reset Demo Data (local seed) */}
-      <div className="border border-[#1F2937] rounded-2xl p-5 space-y-4">
-        <div>
-          <p className="text-sm font-semibold text-gray-300">Reset Demo Data (Local)</p>
-          <p className="text-xs text-[#9CA3AF] mt-1">Resets client-side seed data to defaults. Does not affect the database.</p>
-        </div>
-
-        {done && (
-          <p className="text-sm text-green-400 bg-green-900/20 border border-green-800 rounded-xl px-3 py-2">✓ Demo data restored successfully.</p>
-        )}
-
-        {!confirmed ? (
-          <button onClick={() => setConfirmed(true)} className="px-4 py-2.5 text-sm font-medium bg-[#1F2937] text-gray-300 border border-[#374151] rounded-xl hover:bg-[#2D3748] transition-colors">
-            Reset Demo Data
-          </button>
-        ) : (
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-gray-400 font-medium">Are you sure?</p>
-            <button onClick={handleReset} className="px-3 py-1.5 text-sm font-medium bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition-colors">Yes, Reset</button>
-            <button onClick={() => setConfirmed(false)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

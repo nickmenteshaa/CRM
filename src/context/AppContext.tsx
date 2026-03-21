@@ -9,9 +9,9 @@ import {
   dbCreateActivity,
   dbCreateCompany, dbUpdateCompany, dbDeleteCompany, dbBulkDeleteCompanies,
   dbCreateMessage, dbDeleteMessage,
-  dbReset,
   dbAISummarize, dbAIConversation, dbAIFollowUp,
 } from "@/lib/actions";
+import { dbResetAllBusinessData } from "@/lib/actions-reset";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -282,52 +282,7 @@ function generateNextAction(status: string, activityCount: number): string {
 
 const PROTECTED_STATUSES = new Set(["Qualified", "Lost", "Cold"]);
 
-// ── Seed data (used for first-run and reset) ───────────────────────────────────
-
-const seedLeads: Omit<Lead, "id">[] = [
-  { name: "Alice Johnson", email: "alice@acme.com",     phone: "+1 555-0101", status: "Qualified", source: "Website",   lastContact: "Today",      ownerId: "u2", carModel: "BMW X5", carYear: "2024", carPrice: "$62,000", carVin: "WBA5R1C50LAF12345", carCondition: "New" },
-  { name: "Bob Smith",     email: "bob@globex.com",     phone: "+1 555-0102", status: "New",       source: "Referral",  lastContact: "Yesterday",  ownerId: "u2", carModel: "Toyota Camry", carYear: "2023", carPrice: "$28,500", carVin: "4T1BZ1HK5PU123456", carCondition: "Used" },
-  { name: "Carol White",   email: "carol@initech.com",  phone: "+1 555-0103", status: "Contacted", source: "LinkedIn",  lastContact: "Mar 18",     ownerId: "u2", carModel: "Mercedes C300", carYear: "2024", carPrice: "$45,000", carVin: "W1KZF8DB1PA000001", carCondition: "Certified Pre-Owned" },
-  { name: "David Lee",     email: "david@umbrella.com", phone: "+1 555-0104", status: "Lost",      source: "Cold Call", lastContact: "Mar 15",     ownerId: "u1", carModel: "Honda Civic", carYear: "2022", carPrice: "$24,000", carVin: "2HGFC2F69NH500001", carCondition: "Used" },
-  { name: "Eva Martinez",  email: "eva@soylent.com",    phone: "+1 555-0105", status: "New",       source: "Website",   lastContact: "Mar 14",     ownerId: "u1", carModel: "Tesla Model 3", carYear: "2024", carPrice: "$42,990", carVin: "5YJ3E1EA0PF100001", carCondition: "New" },
-  { name: "Frank Chen",    email: "frank@initech.com",  phone: "+1 555-0106", status: "Qualified", source: "Event",     lastContact: "Mar 12", carModel: "Audi A4", carYear: "2023", carPrice: "$39,900", carCondition: "New" },
-  { name: "Grace Kim",     email: "grace@acme.com",     phone: "+1 555-0107", status: "Contacted", source: "Referral",  lastContact: "Mar 10", carModel: "Ford F-150", carYear: "2024", carPrice: "$55,000", carCondition: "New" },
-  { name: "Henry Park",    email: "henry@globex.com",   phone: "+1 555-0108", status: "Qualified", source: "LinkedIn",  lastContact: "Mar 8", carModel: "Chevrolet Tahoe", carYear: "2023", carPrice: "$58,000", carCondition: "Certified Pre-Owned" },
-  { name: "Isla Torres",   email: "isla@umbrella.com",  phone: "+1 555-0109", status: "Lost",      source: "Cold Call", lastContact: "Mar 5" },
-  { name: "James Brown",   email: "james@soylent.com",  phone: "+1 555-0110", status: "New",       source: "Website",   lastContact: "Mar 3", carModel: "Porsche Cayenne", carYear: "2024", carPrice: "$82,000", carCondition: "New" },
-];
-
-const seedTasks: Omit<Task, "id">[] = [
-  { title: "Send proposal to Globex Inc",  leadName: "Bob Smith",    due: "Today",    priority: "High",   done: false, auto: false, ownerId: "u2" },
-  { title: "Schedule demo with Initech",   leadName: "Carol White",  due: "Tomorrow", priority: "Medium", done: false, auto: false, ownerId: "u2" },
-  { title: "Review Umbrella contract",     leadName: "David Lee",    due: "Mar 22",   priority: "High",   done: false, auto: false, ownerId: "u1" },
-  { title: "Onboarding call — Soylent Co", leadName: "Eva Martinez", due: "Mar 23",   priority: "Low",    done: false, auto: false, ownerId: "u1" },
-  { title: "Check in with Frank Chen",     leadName: "Frank Chen",   due: "Mar 24",   priority: "Low",    done: true,  auto: false },
-  { title: "Send invoice — Acme Pro",      leadName: "Grace Kim",    due: "Mar 25",   priority: "Medium", done: true,  auto: false },
-  { title: "Renewal discussion — Globex",  leadName: "Henry Park",   due: "Mar 28",   priority: "Medium", done: false, auto: false },
-];
-
-const seedDeals: Omit<Deal, "id">[] = [
-  { name: "BMW X5 Sale",           contact: "Alice Johnson", value: "$62,000", stage: "Negotiation", close: "Mar 30", owner: "Sales Rep",  ownerId: "u2", carModel: "BMW X5", carYear: "2024", carPrice: "$62,000", carCondition: "New" },
-  { name: "Toyota Camry Trade-in", contact: "Bob Smith",     value: "$28,500", stage: "Proposal",    close: "Apr 5",  owner: "Sales Rep",  ownerId: "u2", carModel: "Toyota Camry", carYear: "2023", carPrice: "$28,500", carCondition: "Used" },
-  { name: "Mercedes CPO Deal",     contact: "Carol White",   value: "$45,000", stage: "Qualified",   close: "Apr 12", owner: "Sales Rep",  ownerId: "u2", carModel: "Mercedes C300", carYear: "2024", carPrice: "$45,000", carCondition: "Certified Pre-Owned" },
-  { name: "Tesla Model 3 Order",   contact: "Eva Martinez",  value: "$42,990", stage: "Prospecting", close: "Apr 20", owner: "Admin User", ownerId: "u1", carModel: "Tesla Model 3", carYear: "2024", carPrice: "$42,990", carCondition: "New" },
-  { name: "Porsche Cayenne Sale",  contact: "James Brown",   value: "$82,000", stage: "Closed Won",  close: "Mar 15", owner: "Admin User", ownerId: "u1", carModel: "Porsche Cayenne", carYear: "2024", carPrice: "$82,000", carCondition: "New" },
-  { name: "Audi A4 Lease",         contact: "Frank Chen",    value: "$39,900", stage: "Proposal",    close: "Apr 8", carModel: "Audi A4", carYear: "2023", carPrice: "$39,900", carCondition: "New" },
-  { name: "Ford F-150 Sale",       contact: "Grace Kim",     value: "$55,000", stage: "Qualified",   close: "Apr 18", carModel: "Ford F-150", carYear: "2024", carPrice: "$55,000", carCondition: "New" },
-  { name: "Chevrolet Tahoe CPO",   contact: "Henry Park",    value: "$58,000", stage: "Negotiation", close: "Apr 2", carModel: "Chevrolet Tahoe", carYear: "2023", carPrice: "$58,000", carCondition: "Certified Pre-Owned" },
-];
-
-const seedCompanies: Omit<Company, "id">[] = [
-  { name: "Acme Motors",       industry: "Auto Dealership",  contacts: 4, revenue: "$117,000", status: "Active",  website: "acmemotors.com",      phone: "+1 555-1001" },
-  { name: "Globex Auto Group", industry: "Auto Dealership",  contacts: 3, revenue: "$86,500",  status: "Active",  website: "globexauto.com",      phone: "+1 555-1002" },
-  { name: "Initech Leasing",   industry: "Auto Finance",     contacts: 2, revenue: "$84,900",  status: "Active",  website: "initechleasing.com",  phone: "+1 555-1003" },
-  { name: "Umbrella Fleet",    industry: "Fleet Management", contacts: 2, revenue: "$66,990",  status: "At Risk", website: "umbrellafleet.com",   phone: "+1 555-1004" },
-  { name: "Soylent Transport", industry: "Logistics",        contacts: 2, revenue: "$42,990",  status: "Active",  website: "soylenttrans.com",    phone: "+1 555-1005" },
-  { name: "Hooli Cars",        industry: "Auto Marketplace", contacts: 1, revenue: "$14,000",  status: "Lead",    website: "hoolicars.com",       phone: "+1 555-1006" },
-  { name: "Pied Piper Auto",   industry: "Auto Tech",        contacts: 1, revenue: "$6,800",   status: "Lead",    website: "piedpiperauto.com",   phone: "+1 555-1007" },
-  { name: "Dunder Auto Parts", industry: "Parts & Service",  contacts: 3, revenue: "$9,300",   status: "Churned", website: "dunderautoparts.com", phone: "+1 555-1008" },
-];
+// Seed data removed — production CRM reads only from the database.
 
 // ── Context type ───────────────────────────────────────────────────────────────
 
@@ -361,8 +316,8 @@ type AppContextType = {
   aiSummarizeLead: (leadId: string) => Promise<void>;
   aiConversation: (leadId: string, text: string) => Promise<void>;
   aiFollowUp: (leadId: string) => Promise<void>;
-  resetToSeedData: () => void;
   reloadFromDb: () => Promise<void>;
+  purgeAllData: () => Promise<{ ok: boolean; counts: Record<string, number> }>;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -379,19 +334,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [loaded,     setLoaded]     = useState(false);
 
-  // ── Mount: load from DB; if empty AND not in production mode, seed first ───
+  // ── Mount: load from DB ────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
-      let data = await dbGetAll();
-
-      // Only auto-seed if the system has never been deliberately reset to empty.
-      // Once admin runs "Reset System Data", we set a flag so demo data is never re-seeded.
-      const isProductionMode = typeof window !== "undefined" && localStorage.getItem("crm_production_mode") === "1";
-
-      if (data.leads.length === 0 && !isProductionMode) {
-        await dbReset({ leads: seedLeads, tasks: seedTasks, deals: seedDeals, companies: seedCompanies });
-        data = await dbGetAll();
-      }
+      const data = await dbGetAll();
 
       const processedLeads = data.leads.map((lead) => {
         let status = lead.status;
@@ -657,25 +603,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // ── Reset (legacy: re-seed with demo data) ─────────────────────────────────
-  function resetToSeedData() {
-    setLoaded(false);
-    // Clear production mode flag so demo data can be seeded again
-    if (typeof window !== "undefined") localStorage.removeItem("crm_production_mode");
-    dbReset({ leads: seedLeads, tasks: seedTasks, deals: seedDeals, companies: seedCompanies })
-      .then(() => dbGetAll())
-      .then((data) => {
-        setLeads(data.leads);
-        setTasks(data.tasks);
-        setDeals(data.deals);
-        setCompanies(data.companies);
-        setActivities(data.activities);
-        setMessages(data.messages);
-        setLoaded(true);
-      });
-  }
-
-  // ── Reload client state from DB (used after server-side purge) ────────────
+  // ── Reload client state from DB ───────────────────────────────────────────
   async function reloadFromDb() {
     const data = await dbGetAll();
     setLeads(data.leads);
@@ -685,6 +613,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActivities(data.activities);
     setMessages(data.messages);
     setLoaded(true);
+  }
+
+  // ── Purge all business data via server action ─────────────────────────────
+  async function purgeAllData(): Promise<{ ok: boolean; counts: Record<string, number> }> {
+    const result = await dbResetAllBusinessData();
+    if (result.ok) {
+      // Reload client state from the now-empty database
+      await reloadFromDb();
+    }
+    return result;
   }
 
   const visibleLeads = leads.filter((l) => canAccessOwnerId(l.ownerId));
@@ -703,7 +641,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addActivity,
       addMessage, deleteMessage,
       aiSummarizeLead, aiConversation, aiFollowUp,
-      resetToSeedData, reloadFromDb,
+      reloadFromDb, purgeAllData,
     }}>
       {children}
     </AppContext.Provider>
