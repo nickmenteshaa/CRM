@@ -32,11 +32,17 @@ function LoginForm() {
     setError("");
     setLoading(true);
     const result = login(email, password);
-    setLoading(false);
     if (!result.ok) {
+      setLoading(false);
       setError(result.error ?? "Login failed");
     } else {
-      router.replace(searchParams.get("from") ?? "/");
+      // Cookie is already set synchronously by login().
+      // Use window.location for a full page navigation so the middleware
+      // sees the fresh cookie. router.replace can race with middleware
+      // on Vercel production because Next.js client-side navigation
+      // may prefetch the target route before the cookie is visible.
+      const dest = searchParams.get("from") ?? "/";
+      window.location.href = dest;
     }
   }
 

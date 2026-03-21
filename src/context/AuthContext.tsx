@@ -69,6 +69,21 @@ const SESSION_KEY = "crm_session";
 const USERS_KEY = "crm_users";
 const TEAMS_KEY = "crm_teams";
 
+/**
+ * Synchronously set or clear the crm_session cookie.
+ * Uses SameSite=Lax (not Strict) so the cookie is sent on same-site navigations
+ * including client-side router.replace() on Vercel production.
+ */
+function setSessionCookie(active: boolean) {
+  if (typeof document === "undefined") return;
+  const secure = window.location.protocol === "https:" ? "; Secure; SameSite=Lax" : "; SameSite=Lax";
+  if (active) {
+    document.cookie = `crm_session=1; path=/; max-age=86400${secure}`;
+  } else {
+    document.cookie = `crm_session=; path=/; max-age=0${secure}`;
+  }
+}
+
 function loadUsers(): StoredUser[] {
   if (typeof window === "undefined") return DEFAULT_USERS;
   try {
@@ -130,15 +145,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<StoredUser[]>(loadUsers);
   const [teams, setTeams] = useState<Team[]>(loadTeams);
 
-  // Keep session cookie in sync so middleware can read it
+  // Keep session cookie in sync so middleware can read it.
+  // Also persists user to localStorage as backup.
   useEffect(() => {
-    const secure = window.location.protocol === "https:" ? "; Secure; SameSite=Strict" : "";
     if (user) {
       localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-      document.cookie = `crm_session=1; path=/; max-age=86400${secure}`;
+      setSessionCookie(true);
     } else {
       localStorage.removeItem(SESSION_KEY);
-      document.cookie = `crm_session=; path=/; max-age=0${secure}`;
+      setSessionCookie(false);
     }
   }, [user]);
 
@@ -152,11 +167,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
     if (!match) return { ok: false, error: "Invalid email or password" };
     const { password: _, ...safeUser } = match;
+
+    // CRITICAL: Set cookie and localStorage SYNCHRONOUSLY before setUser,
+    // so the cookie is available when router.replace() fires navigation.
+    // Without this, the useEffect that sets the cookie hasn't run yet when
+    // the middleware checks for it, causing a redirect back to /login.
+    localStorage.setItem(SESSION_KEY, JSON.stringify(safeUser));
+    setSessionCookie(true);
+
     setUser(safeUser);
     return { ok: true };
   }
 
   function logout() {
+    localStorage.removeItem(SESSION_KEY);
+    setSessionCookie(false);
     setUser(null);
   }
 

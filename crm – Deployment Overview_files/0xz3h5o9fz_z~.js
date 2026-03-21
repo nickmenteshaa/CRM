@@ -1,0 +1,5 @@
+;!function(){try { var e="undefined"!=typeof globalThis?globalThis:"undefined"!=typeof global?global:"undefined"!=typeof window?window:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&((e._debugIds|| (e._debugIds={}))[n]="4c53f440-fe28-67e7-83f4-dfaf5a3114c7")}catch(e){}}();
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,9509950,e=>{"use strict";var t=e.i(3597900),r=e.i(3385576),c=e.i(4044320),u=e.i(9179314),a=e.i(5163793);function i(){let e=(0,c.useParams)(),t=(0,r.useRef)(void 0);return(0,r.useEffect)(()=>{if(!e?.teamSlug||!e.project)return;let r=`${e.teamSlug}/${e.project}`;t.current!==r&&(t.current=r,(0,u.sendBeacon)(`/api/dashboard/projects/${e.project}/activity?teamId=${e.teamSlug}`,{}).catch(()=>{}))},[e?.project,e?.teamSlug]),null}e.s(["TrackUserProjectActivity",0,function(){return(0,t.jsx)(a.TrackedSuspense,{fallback:null,children:(0,t.jsx)(i,{})})}])}]);
+
+//# debugId=4c53f440-fe28-67e7-83f4-dfaf5a3114c7
+//# sourceMappingURL=0chlu7p323xfd.js.map
