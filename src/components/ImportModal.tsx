@@ -195,7 +195,7 @@ export default function ImportModal<T extends { id: string }>({
   // ── Import ─────────────────────────────────────────────────────────────────
 
   const [timing, setTiming] = useState({ totalMs: 0, avgBatchMs: 0, batchCount: 0 });
-  const BATCH_SIZE = 500; // rows per DB write — gives granular progress (20 updates for 10k rows)
+  const BATCH_SIZE = 200; // rows per server action call — smaller for Neon pooler reliability
 
   const handleImport = async () => {
     cancelledRef.current = false;

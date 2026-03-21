@@ -180,31 +180,66 @@ export async function dbCreatePart(data: Omit<Part, "id">): Promise<Part> {
 }
 
 /**
- * Insert a single batch of parts via createMany. Called once per batch from the client.
- * Client controls batch size and loop so UI progress updates after every DB write.
- * Recommended batch size: 500 rows (good balance of speed vs granular progress).
+ * Insert a batch of parts via createMany. Internally splits into small sub-batches
+ * of 50 rows to stay within Neon pooler limits, with retry logic.
+ * The client sends up to 500 rows; this function handles safe writes.
  */
 export async function dbBulkCreateParts(
   records: Omit<Part, "id">[],
 ): Promise<{ created: number; skipped: number; error?: string }> {
-  try {
-    const result = await prisma.part.createMany({
-      data: records.map((d) => ({
-        sku: d.sku, name: d.name,
-        description: d.description, oemNumber: d.oemNumber,
-        brand: d.brand, categoryId: d.categoryId,
-        compatMake: d.compatMake, compatModel: d.compatModel,
-        compatYearFrom: d.compatYearFrom, compatYearTo: d.compatYearTo,
-        weight: d.weight, dimensions: d.dimensions,
-        imageUrl: d.imageUrl, unitPrice: d.unitPrice,
-        costPrice: d.costPrice, isActive: d.isActive ?? true,
-      })),
-      skipDuplicates: true,
-    });
-    return { created: result.count, skipped: records.length - result.count };
-  } catch (err) {
-    return { created: 0, skipped: 0, error: err instanceof Error ? err.message : "DB write failed" };
+  const SUB_BATCH = 50; // small enough for Neon pooler transaction buffers
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  console.log(`[IMPORT] dbBulkCreateParts called with ${records.length} records`);
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+    let success = false;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.part.createMany({
+          data: chunk.map((d) => ({
+            sku: d.sku, name: d.name,
+            description: d.description, oemNumber: d.oemNumber,
+            brand: d.brand, categoryId: d.categoryId,
+            compatMake: d.compatMake, compatModel: d.compatModel,
+            compatYearFrom: d.compatYearFrom, compatYearTo: d.compatYearTo,
+            weight: d.weight, dimensions: d.dimensions,
+            imageUrl: d.imageUrl, unitPrice: d.unitPrice,
+            costPrice: d.costPrice, isActive: d.isActive ?? true,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        success = true;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "DB write failed";
+        console.error(`[IMPORT] Sub-batch ${i / SUB_BATCH + 1} attempt ${attempt + 1} failed: ${msg}`);
+        if (attempt < MAX_RETRIES) {
+          // Wait before retry (exponential backoff)
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          // Final attempt failed — return partial results with error
+          const rowStart = i + 1;
+          const rowEnd = Math.min(i + SUB_BATCH, records.length);
+          console.error(`[IMPORT] Sub-batch rows ${rowStart}–${rowEnd} permanently failed`);
+          return {
+            created: totalCreated,
+            skipped: totalSkipped,
+            error: `Failed at rows ${rowStart}–${rowEnd} after ${MAX_RETRIES + 1} attempts: ${msg}`,
+          };
+        }
+      }
+    }
   }
+
+  console.log(`[IMPORT] Batch complete: created=${totalCreated}, skipped=${totalSkipped}`);
+  return { created: totalCreated, skipped: totalSkipped };
 }
 
 export async function dbUpdatePart(id: string, updates: Partial<Part>): Promise<Part> {
