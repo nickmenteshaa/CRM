@@ -74,11 +74,13 @@ const TEAMS_KEY = "crm_teams";
  * Uses SameSite=Lax (not Strict) so the cookie is sent on same-site navigations
  * including client-side router.replace() on Vercel production.
  */
-function setSessionCookie(active: boolean) {
+function setSessionCookie(active: boolean, userInfo?: { id: string; role: string }) {
   if (typeof document === "undefined") return;
   const secure = window.location.protocol === "https:" ? "; Secure; SameSite=Lax" : "; SameSite=Lax";
-  if (active) {
-    document.cookie = `crm_session=1; path=/; max-age=86400${secure}`;
+  if (active && userInfo) {
+    // Encode user ID and role so server-side API routes can read them
+    const val = encodeURIComponent(JSON.stringify({ id: userInfo.id, role: userInfo.role }));
+    document.cookie = `crm_session=${val}; path=/; max-age=86400${secure}`;
   } else {
     document.cookie = `crm_session=; path=/; max-age=0${secure}`;
   }
@@ -150,7 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (user) {
       localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-      setSessionCookie(true);
+      setSessionCookie(true, { id: user.id, role: user.role });
     } else {
       localStorage.removeItem(SESSION_KEY);
       setSessionCookie(false);

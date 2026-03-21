@@ -10,8 +10,15 @@ export async function GET() {
   const session = cookieStore.get("crm_session");
   if (!session?.value) return NextResponse.json({ error: "no session" }, { status: 401 });
   let role = "";
-  try { role = JSON.parse(session.value).role; } catch { /* */ }
-  if (role !== "admin") return NextResponse.json({ error: "not admin" }, { status: 403 });
+  try {
+    const decoded = decodeURIComponent(session.value);
+    role = JSON.parse(decoded).role;
+  } catch {
+    // Legacy cookie format (just "1") — allow through for diagnostic purposes
+    // but we can't verify admin, so block it
+    return NextResponse.json({ error: "not admin (cookie format: " + session.value.substring(0, 20) + ")" }, { status: 403 });
+  }
+  if (role !== "admin") return NextResponse.json({ error: "not admin", cookieRole: role }, { status: 403 });
 
   const results: Record<string, string> = {};
 

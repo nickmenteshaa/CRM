@@ -39,7 +39,8 @@ export async function POST(request: NextRequest) {
 
   let sessionData: { role?: string };
   try {
-    sessionData = JSON.parse(session.value);
+    const decoded = decodeURIComponent(session.value);
+    sessionData = JSON.parse(decoded);
   } catch {
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
   }
