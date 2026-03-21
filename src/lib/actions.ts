@@ -196,6 +196,7 @@ export async function dbGetLeadsPaginated(opts: {
   customerType?: string;
   country?: string;
   source?: string;
+  ownerId?: string;
   sortKey?: string;
   sortDir?: "asc" | "desc";
 }): Promise<LeadsPageResult> {
@@ -234,8 +235,16 @@ export async function dbGetLeadsPaginated(opts: {
     where.source = opts.source;
   }
 
+  if (opts.ownerId && opts.ownerId !== "all") {
+    if (opts.ownerId === "unassigned") {
+      where.ownerId = null;
+    } else {
+      where.ownerId = opts.ownerId;
+    }
+  }
+
   // Build orderBy
-  const allowedSorts = ["name", "status", "source", "lastContact", "companyName", "country", "createdAt", "customerType"];
+  const allowedSorts = ["name", "status", "source", "lastContact", "companyName", "country", "createdAt", "customerType", "ownerId"];
   const sortField = opts.sortKey && allowedSorts.includes(opts.sortKey) ? opts.sortKey : "createdAt";
   const sortDirection = opts.sortDir === "asc" ? "asc" : "desc";
   const orderBy = { [sortField]: sortDirection };
@@ -410,6 +419,65 @@ export async function dbDeleteLead(id: string): Promise<void> {
 
 export async function dbBulkDeleteLeads(ids: string[]): Promise<void> {
   await prisma.lead.deleteMany({ where: { id: { in: ids } } });
+}
+
+// ── RANDOM CUSTOMER ASSIGNMENT ────────────────────────────────────────────────
+
+export async function dbRandomAssignCustomers(
+  mode: "all" | "unassigned_only"
+): Promise<{ assigned: number; reps: { id: string; name: string; count: number }[] }> {
+  // 1. Get all sales reps (NOT managers/admins)
+  const reps = await prisma.employee.findMany({
+    where: { role: "sales_rep", isActive: true },
+    select: { id: true, name: true },
+  });
+
+  if (reps.length === 0) {
+    throw new Error("No active sales reps found");
+  }
+
+  // 2. Get customer IDs to assign
+  const whereClause = mode === "unassigned_only"
+    ? { ownerId: null }
+    : {};
+
+  const customers = await prisma.lead.findMany({
+    where: whereClause,
+    select: { id: true },
+  });
+
+  if (customers.length === 0) {
+    return { assigned: 0, reps: reps.map((r) => ({ ...r, count: 0 })) };
+  }
+
+  // 3. Shuffle customers (Fisher-Yates)
+  const shuffled = [...customers];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  // 4. Round-robin assign to reps
+  const repCounts = new Map<string, number>(reps.map((r) => [r.id, 0]));
+  const BATCH = 200;
+
+  for (let i = 0; i < shuffled.length; i += BATCH) {
+    const chunk = shuffled.slice(i, i + BATCH);
+    const updates = chunk.map((c, idx) => {
+      const rep = reps[(i + idx) % reps.length];
+      repCounts.set(rep.id, (repCounts.get(rep.id) ?? 0) + 1);
+      return prisma.lead.update({
+        where: { id: c.id },
+        data: { ownerId: rep.id },
+      });
+    });
+    await prisma.$transaction(updates);
+  }
+
+  return {
+    assigned: shuffled.length,
+    reps: reps.map((r) => ({ id: r.id, name: r.name, count: repCounts.get(r.id) ?? 0 })),
+  };
 }
 
 // ── TASKS ─────────────────────────────────────────────────────────────────────

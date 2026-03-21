@@ -11,7 +11,7 @@ import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
 import ImportModal from "@/components/ImportModal";
 import ChatPanel from "@/components/ChatPanel";
 import { customerImportConfig } from "@/lib/import-configs";
-import { dbGetLeadsPaginated, dbGetLeadsFilterOptions, dbCreateLead, dbUpdateLead as serverUpdateLead, dbBulkCreateLeads } from "@/lib/actions";
+import { dbGetLeadsPaginated, dbGetLeadsFilterOptions, dbCreateLead, dbUpdateLead as serverUpdateLead, dbBulkCreateLeads, dbRandomAssignCustomers } from "@/lib/actions";
 
 const FIELDS = [
   { key: "name",           label: "Name" },
@@ -184,6 +184,10 @@ export default function LeadsPage() {
   const [messageOpen, setMessageOpen]     = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignMode, setAssignMode] = useState<"all" | "unassigned_only">("unassigned_only");
+  const [assigning, setAssigning] = useState(false);
+  const [assignResult, setAssignResult] = useState<{ assigned: number; reps: { name: string; count: number }[] } | null>(null);
 
   // form states
   const [addForm, setAddForm]       = useState(emptyForm);
@@ -203,9 +207,10 @@ export default function LeadsPage() {
   const [filterCustomerType, setFilterCustomerType] = useState("");
   const [filterCountry, setFilterCountry] = useState("");
   const [filterSource, setFilterSource] = useState("");
+  const [filterOwner, setFilterOwner] = useState("");
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [filterStatus, filterCustomerType, filterCountry, filterSource]);
+  useEffect(() => { setPage(1); }, [filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner]);
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -229,6 +234,7 @@ export default function LeadsPage() {
         customerType: filterCustomerType || undefined,
         country: filterCountry || undefined,
         source: filterSource || undefined,
+        ownerId: filterOwner || undefined,
         sortKey: sortKey ?? "createdAt",
         sortDir: sortDir,
       });
@@ -241,7 +247,7 @@ export default function LeadsPage() {
       setFetching(false);
       setLoaded(true);
     }
-  }, [page, debouncedQuery, filterStatus, filterCustomerType, filterCountry, filterSource, sortKey, sortDir]);
+  }, [page, debouncedQuery, filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner, sortKey, sortDir]);
 
   useEffect(() => { fetchPage(); }, [fetchPage]);
 
@@ -414,9 +420,14 @@ export default function LeadsPage() {
           </div>
           <div className="flex items-center gap-2">
             {isAdmin && (
+              <>
+              <button onClick={() => { setAssignResult(null); setAssignOpen(true); }} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-all">
+                🔀 Assign Reps
+              </button>
               <button onClick={() => setImportOpen(true)} className="border border-[#1F2937] text-gray-300 text-sm font-medium px-4 py-2.5 rounded-xl hover:bg-[#1F2937] transition-all">
                 ↑ Import
               </button>
+              </>
             )}
             <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all shadow-sm">
               + Add Customer
@@ -466,8 +477,13 @@ export default function LeadsPage() {
             <option value="">All Sources</option>
             {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          {(filterCustomerType || filterCountry || filterStatus || filterSource) && (
-            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterStatus(""); setFilterSource(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
+          <select value={filterOwner} onChange={(e) => setFilterOwner(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">All Reps</option>
+            <option value="unassigned">Unassigned</option>
+            {allUsers.filter((u) => u.role === "sales_rep").map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+          {(filterCustomerType || filterCountry || filterStatus || filterSource || filterOwner) && (
+            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterStatus(""); setFilterSource(""); setFilterOwner(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
           )}
         </div>
 
@@ -486,11 +502,12 @@ export default function LeadsPage() {
                 <SortHeader label="Status" sortKey="status" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
                 <SortHeader label="Source" sortKey="source" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
                 <SortHeader label="Last Contact" sortKey="lastContact" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <th className="px-5 py-3 font-medium">Assigned Rep</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1F2937]">
               {customers.length === 0 ? (
-                <tr><td colSpan={9}><EmptyState icon="👤" title="No customers found" description="Try adjusting your search or filters, or add a new customer." /></td></tr>
+                <tr><td colSpan={10}><EmptyState icon="👤" title="No customers found" description="Try adjusting your search or filters, or add a new customer." /></td></tr>
               ) : customers.map((lead) => (
                 <tr key={lead.id} onClick={() => openDetailPanel(lead)} className={`cursor-pointer transition-colors ${selected?.id === lead.id ? "bg-blue-900/30" : "hover:bg-gray-800/50"}`}>
                   <td className="px-5 py-3.5" onClick={(e) => e.stopPropagation()}>
@@ -519,6 +536,11 @@ export default function LeadsPage() {
                     <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${sourceStyles[lead.source] ?? "bg-gray-100 text-gray-600"}`}>{lead.source}</span>
                   </td>
                   <td className="px-5 py-3.5 text-gray-500">{lead.lastContact}</td>
+                  <td className="px-5 py-3.5 text-[#9CA3AF]">
+                    {lead.ownerId ? (
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-900/30 text-blue-300">{ownerName(lead.ownerId)}</span>
+                    ) : <span className="text-gray-600 text-xs">Unassigned</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1152,6 +1174,83 @@ export default function LeadsPage() {
           })}
           onClose={handleImportClose}
         />
+      )}
+
+      {/* ── Random Assign Modal ──────────────────────────────────────────── */}
+      {assignOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => !assigning && setAssignOpen(false)}>
+          <div className="bg-[#111827] border border-[#1F2937] rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-[#F9FAFB] mb-4">🔀 Randomly Assign Customers</h3>
+
+            {!assignResult ? (
+              <>
+                <p className="text-sm text-[#9CA3AF] mb-4">
+                  Distribute customers evenly across all active <strong>sales reps</strong>. Managers and admins will not receive assignments.
+                </p>
+
+                <div className="space-y-3 mb-6">
+                  <label className="flex items-center gap-3 p-3 border border-[#1F2937] rounded-xl cursor-pointer hover:bg-[#1F2937]/50 transition-colors">
+                    <input type="radio" name="assignMode" checked={assignMode === "unassigned_only"} onChange={() => setAssignMode("unassigned_only")} className="accent-blue-500" />
+                    <div>
+                      <span className="text-sm font-medium text-[#F9FAFB]">Assign only unassigned</span>
+                      <p className="text-xs text-gray-500">Keep existing assignments, fill in the gaps</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center gap-3 p-3 border border-[#1F2937] rounded-xl cursor-pointer hover:bg-[#1F2937]/50 transition-colors">
+                    <input type="radio" name="assignMode" checked={assignMode === "all"} onChange={() => setAssignMode("all")} className="accent-blue-500" />
+                    <div>
+                      <span className="text-sm font-medium text-[#F9FAFB]">Overwrite all</span>
+                      <p className="text-xs text-gray-500">Reassign every customer, replacing existing owners</p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex gap-3 justify-end">
+                  <button onClick={() => setAssignOpen(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors" disabled={assigning}>Cancel</button>
+                  <button
+                    onClick={async () => {
+                      setAssigning(true);
+                      try {
+                        const result = await dbRandomAssignCustomers(assignMode);
+                        setAssignResult(result);
+                        fetchPage();
+                      } catch (err) {
+                        console.error("Assign failed:", err);
+                        alert("Assignment failed: " + (err instanceof Error ? err.message : "Unknown error"));
+                      } finally {
+                        setAssigning(false);
+                      }
+                    }}
+                    disabled={assigning}
+                    className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all disabled:opacity-50"
+                  >
+                    {assigning ? "Assigning..." : "Assign Now"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-4 bg-green-900/20 border border-green-800 text-green-300 text-sm rounded-xl px-4 py-3">
+                  ✓ Successfully assigned <strong>{assignResult.assigned.toLocaleString()}</strong> customers
+                </div>
+
+                <div className="space-y-2 mb-6">
+                  <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">Distribution</p>
+                  {assignResult.reps.map((r) => (
+                    <div key={r.name} className="flex justify-between text-sm text-[#9CA3AF] px-2 py-1.5 bg-[#0B0F14] rounded-lg">
+                      <span>{r.name}</span>
+                      <span className="font-medium text-[#F9FAFB]">{r.count.toLocaleString()} customers</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end">
+                  <button onClick={() => setAssignOpen(false)} className="bg-blue-600 text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-blue-700 transition-all">Done</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
