@@ -6,6 +6,7 @@ import Modal from "@/components/Modal";
 import { useApp } from "@/context/AppContext";
 import { useAuth, ROLE_LABELS, type Role } from "@/context/AuthContext";
 import { useFontSize, type FontSize } from "@/context/FontSizeContext";
+import { dbResetAllBusinessData } from "@/lib/actions-reset";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -774,9 +775,17 @@ function UsersSection() {
 // ── Danger / Data section ──────────────────────────────────────────────────────
 
 function DangerSection() {
-  const { resetToSeedData } = useApp();
+  const { resetToSeedData, reloadFromDb } = useApp();
+  const { isAdmin } = useAuth();
   const [confirmed, setConfirmed] = useState(false);
   const [done, setDone] = useState(false);
+
+  // Production reset state
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [purgeConfirmText, setPurgeConfirmText] = useState("");
+  const [purging, setPurging] = useState(false);
+  const [purgeResult, setPurgeResult] = useState<{ ok: boolean; counts: Record<string, number> } | null>(null);
+  const [purgeError, setPurgeError] = useState("");
 
   function handleReset() {
     resetToSeedData();
@@ -784,6 +793,29 @@ function DangerSection() {
     setDone(true);
     setTimeout(() => setDone(false), 3000);
   }
+
+  async function handlePurge() {
+    setPurging(true);
+    setPurgeError("");
+    try {
+      // Server action — runs on the server, deletes directly from Neon DB
+      const result = await dbResetAllBusinessData();
+      if (!result.ok) throw new Error("Server returned failure");
+      setPurgeResult(result);
+      setPurgeConfirmText("");
+      setShowPurgeModal(false);
+      // Set production mode flag so auto-seeding is permanently disabled
+      localStorage.setItem("crm_production_mode", "1");
+      // Reload client state from the now-empty database (no re-seed)
+      await reloadFromDb();
+    } catch (err) {
+      setPurgeError(err instanceof Error ? err.message : "Reset failed. Please try again.");
+    } finally {
+      setPurging(false);
+    }
+  }
+
+  const totalDeleted = purgeResult ? Object.values(purgeResult.counts).reduce((a, b) => a + b, 0) : 0;
 
   return (
     <div className="space-y-6">
@@ -801,10 +833,108 @@ function DangerSection() {
         </div>
       </div>
 
-      <div className="border border-red-800 rounded-2xl p-5 space-y-4">
+      {/* Production: Reset System Data (admin-only) */}
+      {isAdmin && (
+        <div className="border border-red-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-red-900/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <span className="text-sm">🗑️</span>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-red-400">Reset System Data</p>
+              <p className="text-xs text-[#9CA3AF] mt-1">
+                Permanently delete <strong className="text-gray-300">ALL</strong> business data from the database:
+                leads, companies, deals/orders, tasks, parts, suppliers, inventory, chat, activities, and messages.
+                Users, roles, and settings are kept.
+              </p>
+            </div>
+          </div>
+
+          {purgeResult && (
+            <div className="bg-green-900/20 border border-green-800 rounded-xl px-4 py-3">
+              <p className="text-sm text-green-400 font-medium">✓ System data reset complete — {totalDeleted} records deleted.</p>
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 text-[11px] text-gray-400">
+                {Object.entries(purgeResult.counts).filter(([, v]) => v > 0).map(([k, v]) => (
+                  <span key={k}>{k}: {v}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {purgeError && (
+            <p className="text-sm text-red-400 bg-red-900/20 border border-red-800 rounded-xl px-3 py-2">{purgeError}</p>
+          )}
+
+          <button
+            onClick={() => { setShowPurgeModal(true); setPurgeConfirmText(""); setPurgeError(""); }}
+            className="px-4 py-2.5 text-sm font-medium bg-red-900/20 text-red-400 border border-red-800 rounded-xl hover:bg-red-900/40 transition-colors"
+          >
+            Reset System Data
+          </button>
+
+          {showPurgeModal && (
+            <Modal title="Reset System Data" onClose={() => setShowPurgeModal(false)}>
+              <div className="space-y-4">
+                <div className="bg-red-900/20 border border-red-800 rounded-xl px-4 py-3">
+                  <p className="text-sm text-red-400 font-semibold">⚠️ This will permanently delete ALL business data</p>
+                  <ul className="mt-2 text-xs text-red-300/80 space-y-0.5 list-disc list-inside">
+                    <li>All customers / leads</li>
+                    <li>All companies</li>
+                    <li>All deals and orders (including order lines)</li>
+                    <li>All tasks</li>
+                    <li>All parts, categories, and inventory</li>
+                    <li>All suppliers and supplier-part links</li>
+                    <li>All warehouses</li>
+                    <li>All chat conversations and messages</li>
+                    <li>All activities and communication records</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <p className="text-sm text-gray-300 mb-2">
+                    Type <span className="font-mono font-bold text-red-400 bg-red-900/30 px-1.5 py-0.5 rounded">DELETE</span> to confirm:
+                  </p>
+                  <input
+                    type="text"
+                    value={purgeConfirmText}
+                    onChange={(e) => setPurgeConfirmText(e.target.value)}
+                    placeholder="DELETE"
+                    className="w-full border border-[#374151] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] placeholder-gray-600 bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent font-mono"
+                    autoFocus
+                  />
+                </div>
+
+                {purgeError && (
+                  <p className="text-sm text-red-400 bg-red-900/20 border border-red-800 rounded-xl px-3 py-2">{purgeError}</p>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    onClick={() => setShowPurgeModal(false)}
+                    className="px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200"
+                    disabled={purging}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePurge}
+                    disabled={purgeConfirmText !== "DELETE" || purging}
+                    className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-xl hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-sm"
+                  >
+                    {purging ? "Deleting…" : "Permanently Delete All Data"}
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
+        </div>
+      )}
+
+      {/* Legacy: Reset Demo Data (local seed) */}
+      <div className="border border-[#1F2937] rounded-2xl p-5 space-y-4">
         <div>
-          <p className="text-sm font-semibold text-red-700">Reset Demo Data</p>
-          <p className="text-xs text-[#9CA3AF] mt-1">Clears all data and restores the original seed data. This cannot be undone.</p>
+          <p className="text-sm font-semibold text-gray-300">Reset Demo Data (Local)</p>
+          <p className="text-xs text-[#9CA3AF] mt-1">Resets client-side seed data to defaults. Does not affect the database.</p>
         </div>
 
         {done && (
@@ -812,13 +942,13 @@ function DangerSection() {
         )}
 
         {!confirmed ? (
-          <button onClick={() => setConfirmed(true)} className="px-4 py-2.5 text-sm font-medium bg-red-900/20 text-red-400 border border-red-800 rounded-xl hover:bg-red-900/30 transition-colors">
+          <button onClick={() => setConfirmed(true)} className="px-4 py-2.5 text-sm font-medium bg-[#1F2937] text-gray-300 border border-[#374151] rounded-xl hover:bg-[#2D3748] transition-colors">
             Reset Demo Data
           </button>
         ) : (
           <div className="flex items-center gap-3">
-            <p className="text-sm text-red-700 font-medium">Are you sure?</p>
-            <button onClick={handleReset} className="px-3 py-1.5 text-sm font-medium bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors">Yes, Reset</button>
+            <p className="text-sm text-gray-400 font-medium">Are you sure?</p>
+            <button onClick={handleReset} className="px-3 py-1.5 text-sm font-medium bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition-colors">Yes, Reset</button>
             <button onClick={() => setConfirmed(false)} className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
           </div>
         )}

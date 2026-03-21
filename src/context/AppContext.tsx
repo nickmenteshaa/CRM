@@ -362,6 +362,7 @@ type AppContextType = {
   aiConversation: (leadId: string, text: string) => Promise<void>;
   aiFollowUp: (leadId: string) => Promise<void>;
   resetToSeedData: () => void;
+  reloadFromDb: () => Promise<void>;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -378,12 +379,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [loaded,     setLoaded]     = useState(false);
 
-  // ── Mount: load from DB; if empty, seed first ──────────────────────────────
+  // ── Mount: load from DB; if empty AND not in production mode, seed first ───
   useEffect(() => {
     async function load() {
       let data = await dbGetAll();
 
-      if (data.leads.length === 0) {
+      // Only auto-seed if the system has never been deliberately reset to empty.
+      // Once admin runs "Reset System Data", we set a flag so demo data is never re-seeded.
+      const isProductionMode = typeof window !== "undefined" && localStorage.getItem("crm_production_mode") === "1";
+
+      if (data.leads.length === 0 && !isProductionMode) {
         await dbReset({ leads: seedLeads, tasks: seedTasks, deals: seedDeals, companies: seedCompanies });
         data = await dbGetAll();
       }
@@ -652,9 +657,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // ── Reset ──────────────────────────────────────────────────────────────────
+  // ── Reset (legacy: re-seed with demo data) ─────────────────────────────────
   function resetToSeedData() {
     setLoaded(false);
+    // Clear production mode flag so demo data can be seeded again
+    if (typeof window !== "undefined") localStorage.removeItem("crm_production_mode");
     dbReset({ leads: seedLeads, tasks: seedTasks, deals: seedDeals, companies: seedCompanies })
       .then(() => dbGetAll())
       .then((data) => {
@@ -666,6 +673,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages(data.messages);
         setLoaded(true);
       });
+  }
+
+  // ── Reload client state from DB (used after server-side purge) ────────────
+  async function reloadFromDb() {
+    const data = await dbGetAll();
+    setLeads(data.leads);
+    setTasks(data.tasks);
+    setDeals(data.deals);
+    setCompanies(data.companies);
+    setActivities(data.activities);
+    setMessages(data.messages);
+    setLoaded(true);
   }
 
   const visibleLeads = leads.filter((l) => canAccessOwnerId(l.ownerId));
@@ -684,7 +703,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addActivity,
       addMessage, deleteMessage,
       aiSummarizeLead, aiConversation, aiFollowUp,
-      resetToSeedData,
+      resetToSeedData, reloadFromDb,
     }}>
       {children}
     </AppContext.Provider>
