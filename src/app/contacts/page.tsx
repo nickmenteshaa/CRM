@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import SearchFilter from "@/components/SearchFilter";
@@ -11,6 +11,7 @@ import { useAuth, ROLE_LABELS } from "@/context/AuthContext";
 import ImportModal from "@/components/ImportModal";
 import ChatPanel from "@/components/ChatPanel";
 import { customerImportConfig } from "@/lib/import-configs";
+import { dbGetLeadsPaginated, dbGetLeadsFilterOptions, dbCreateLead, dbUpdateLead as serverUpdateLead, dbBulkCreateLeads } from "@/lib/actions";
 
 const FIELDS = [
   { key: "name",           label: "Name" },
@@ -34,6 +35,7 @@ const DIRECTION_OPTIONS = ["outbound", "inbound"] as const;
 const CAR_CONDITION_OPTIONS = ["New", "Used", "Certified Pre-Owned"];
 const CUSTOMER_TYPE_OPTIONS = ["individual", "workshop", "dealer", "distributor"];
 const PAYMENT_TERMS_OPTIONS = ["net30", "net60", "cod", "prepaid"];
+const PAGE_SIZE = 50;
 
 const customerTypeStyles: Record<string, string> = {
   individual:  "bg-cyan-100 text-cyan-700",
@@ -112,8 +114,25 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: { label
 }
 
 export default function LeadsPage() {
-  const { leads, deals, activities, messages, addLead, updateLead, deleteLead, bulkDeleteLeads, addDeal, addActivity, addMessage, aiSummarizeLead, aiConversation, aiFollowUp, loaded } = useApp();
+  // Still use AppContext for deals, activities, messages, and mutation functions
+  const { deals, activities, messages, addLead, updateLead, deleteLead, bulkDeleteLeads, addDeal, addActivity, addMessage, aiSummarizeLead, aiConversation, aiFollowUp, loaded: appLoaded } = useApp();
   const { isAdmin, user, allUsers, canAccessOwnerId } = useAuth();
+
+  // ── Server-side paginated customer data ──────────────────────────────────
+  const [customers, setCustomers] = useState<Lead[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [fetching, setFetching] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  // ── Filter options from DB (distinct values) ─────────────────────────────
+  const [filterOptions, setFilterOptions] = useState<{
+    countries: string[];
+    sources: string[];
+    statuses: string[];
+    customerTypes: string[];
+  }>({ countries: [], sources: [], statuses: [], customerTypes: [] });
 
   // Resolve ownerId to display name
   const userMap = useMemo(() => {
@@ -136,9 +155,22 @@ export default function LeadsPage() {
   const [activeFields, setActiveFields] = useState(FIELDS.map((f) => f.key));
   const [justAdded, setJustAdded] = useState<string | null>(null);
 
-  // Sorting
+  // Server-side search (debounced)
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 350);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [query]);
+
+  // Sorting (server-side)
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -166,16 +198,14 @@ export default function LeadsPage() {
     recipient: "",
   });
 
-  // Customer filters
+  // Server-side filters
+  const [filterStatus, setFilterStatus] = useState("");
   const [filterCustomerType, setFilterCustomerType] = useState("");
   const [filterCountry, setFilterCountry] = useState("");
-  const [filterBrand, setFilterBrand] = useState("");
+  const [filterSource, setFilterSource] = useState("");
 
-  const countryOptions = useMemo(() => [...new Set(leads.map((l) => l.country).filter(Boolean))].sort() as string[], [leads]);
-  const brandOptions = useMemo(() => {
-    const all = leads.flatMap((l) => (l.preferredBrands ?? "").split(",").map((b) => b.trim()).filter(Boolean));
-    return [...new Set(all)].sort();
-  }, [leads]);
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [filterStatus, filterCustomerType, filterCountry, filterSource]);
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -187,31 +217,42 @@ export default function LeadsPage() {
   const [convText, setConvText]     = useState("");
   const [detailTab, setDetailTab]   = useState<"details" | "comms" | "chat">("details");
 
-  // Filter + Sort
-  const filtered = useMemo(() => {
-    let result = query.trim()
-      ? leads.filter((l) =>
-          activeFields.some((field) =>
-            String(l[field as keyof Lead] ?? "").toLowerCase().includes(query.toLowerCase())
-          )
-        )
-      : [...leads];
-
-    if (filterCustomerType) result = result.filter((l) => l.customerType === filterCustomerType);
-    if (filterCountry) result = result.filter((l) => l.country === filterCountry);
-    if (filterBrand) result = result.filter((l) => (l.preferredBrands ?? "").toLowerCase().includes(filterBrand.toLowerCase()));
-
-    if (sortKey) {
-      result.sort((a, b) => {
-        const av = String(a[sortKey] ?? "").toLowerCase();
-        const bv = String(b[sortKey] ?? "").toLowerCase();
-        if (av < bv) return sortDir === "asc" ? -1 : 1;
-        if (av > bv) return sortDir === "asc" ? 1 : -1;
-        return 0;
+  // ── Fetch page from server ───────────────────────────────────────────────
+  const fetchPage = useCallback(async () => {
+    setFetching(true);
+    try {
+      const result = await dbGetLeadsPaginated({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery || undefined,
+        status: filterStatus || undefined,
+        customerType: filterCustomerType || undefined,
+        country: filterCountry || undefined,
+        source: filterSource || undefined,
+        sortKey: sortKey ?? "createdAt",
+        sortDir: sortDir,
       });
+      setCustomers(result.leads ?? []);
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error("[CustomersPage] fetch failed:", err);
+    } finally {
+      setFetching(false);
+      setLoaded(true);
     }
-    return result;
-  }, [leads, query, activeFields, sortKey, sortDir, filterCustomerType, filterCountry, filterBrand]);
+  }, [page, debouncedQuery, filterStatus, filterCustomerType, filterCountry, filterSource, sortKey, sortDir]);
+
+  useEffect(() => { fetchPage(); }, [fetchPage]);
+
+  // ── Load filter options once ─────────────────────────────────────────────
+  useEffect(() => {
+    dbGetLeadsFilterOptions().then(setFilterOptions).catch(console.error);
+  }, []);
+
+  // ── Pagination helpers ───────────────────────────────────────────────────
+  const startRow = (page - 1) * PAGE_SIZE + 1;
+  const endRow = Math.min(page * PAGE_SIZE, total);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -220,14 +261,15 @@ export default function LeadsPage() {
       setSortKey(key);
       setSortDir("asc");
     }
+    setPage(1);
   }
 
   // Bulk selection helpers
   function toggleSelectAll() {
-    if (selectedIds.size === filtered.length) {
+    if (selectedIds.size === customers.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filtered.map((l) => l.id)));
+      setSelectedIds(new Set(customers.map((l) => l.id)));
     }
   }
 
@@ -241,9 +283,11 @@ export default function LeadsPage() {
     bulkDeleteLeads(Array.from(selectedIds));
     setSelectedIds(new Set());
     setBulkDeleteConfirm(false);
+    // Reload current page after delete
+    setTimeout(() => fetchPage(), 300);
   }
 
-  const currentSelected = selected ? leads.find((l) => l.id === selected.id) ?? selected : null;
+  const currentSelected = selected ? customers.find((l) => l.id === selected.id) ?? selected : null;
   const leadActivities = currentSelected ? activities.filter((a) => a.leadId === currentSelected.id) : [];
   const leadMessages = currentSelected ? messages.filter((m) => m.leadId === currentSelected.id && m.channel !== "Internal") : [];
   const leadChatMessages = currentSelected ? messages.filter((m) => m.leadId === currentSelected.id && m.channel === "Internal") : [];
@@ -260,6 +304,8 @@ export default function LeadsPage() {
     setTimeout(() => setJustAdded(null), 3000);
     setAddForm(emptyForm);
     setAddOpen(false);
+    // Reload current page to show new record
+    setTimeout(() => { fetchPage(); dbGetLeadsFilterOptions().then(setFilterOptions).catch(console.error); }, 500);
   }
 
   function handleEditOpen(lead: Lead) { setEditForm({ ...lead }); setEditOpen(true); }
@@ -269,6 +315,8 @@ export default function LeadsPage() {
     updateLead(editForm.id, editForm);
     setSelected(editForm);
     setEditOpen(false);
+    // Reload current page
+    setTimeout(() => fetchPage(), 300);
   }
 
   function handleDelete() {
@@ -276,6 +324,8 @@ export default function LeadsPage() {
     deleteLead(selected.id);
     setSelected(null);
     setDeleteConfirm(false);
+    // Reload current page
+    setTimeout(() => fetchPage(), 300);
   }
 
   function handleLogActivity() {
@@ -312,11 +362,12 @@ export default function LeadsPage() {
     setSelected((prev) => prev ? { ...prev, status: "Converted" } : prev);
     setDealForm({ name: "", value: "", stage: "New Opportunity", close: "", owner: "", carModel: "", carYear: "", carPrice: "", carVin: "", carCondition: "" });
     setDealOpen(false);
+    setTimeout(() => fetchPage(), 300);
   }
 
-  async function handleAISummarize() { if (!selected) return; setAiLoading("summarize"); await aiSummarizeLead(selected.id); setAiLoading(null); }
-  async function handleAIConversation() { if (!selected || !convText.trim()) return; setAiLoading("conversation"); await aiConversation(selected.id, convText); setConvText(""); setAiLoading(null); }
-  async function handleAIFollowUp() { if (!selected) return; setAiLoading("followup"); await aiFollowUp(selected.id); setAiLoading(null); }
+  async function handleAISummarize() { if (!selected) return; setAiLoading("summarize"); await aiSummarizeLead(selected.id); setAiLoading(null); setTimeout(() => fetchPage(), 300); }
+  async function handleAIConversation() { if (!selected || !convText.trim()) return; setAiLoading("conversation"); await aiConversation(selected.id, convText); setConvText(""); setAiLoading(null); setTimeout(() => fetchPage(), 300); }
+  async function handleAIFollowUp() { if (!selected) return; setAiLoading("followup"); await aiFollowUp(selected.id); setAiLoading(null); setTimeout(() => fetchPage(), 300); }
 
   function handleLogMessage() {
     if (!currentSelected || !msgForm.body.trim()) return;
@@ -339,6 +390,14 @@ export default function LeadsPage() {
     setConvText("");
   }
 
+  // ── Import close handler: reload paginated page, NOT full dataset ────────
+  function handleImportClose() {
+    setImportOpen(false);
+    // Reload current page + refresh filter options
+    fetchPage();
+    dbGetLeadsFilterOptions().then(setFilterOptions).catch(console.error);
+  }
+
   return (
     <div className="min-h-screen bg-[#0B0F14]">
       <Sidebar />
@@ -348,7 +407,10 @@ export default function LeadsPage() {
         <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
           <div>
             <h2 className="text-2xl font-bold text-[#F9FAFB]">Customers</h2>
-            <p className="text-sm text-[#9CA3AF] mt-1">{filtered.length} of {leads.length} customers</p>
+            <p className="text-sm text-[#9CA3AF] mt-1">
+              {total === 0 ? "No customers" : `${startRow.toLocaleString()}–${endRow.toLocaleString()} of ${total.toLocaleString()} customers`}
+              {fetching && " · Loading..."}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             {isAdmin && (
@@ -386,22 +448,26 @@ export default function LeadsPage() {
 
         <SearchFilter query={query} onQueryChange={setQuery} fields={FIELDS} activeFields={activeFields} onFieldsChange={setActiveFields} placeholder="Search customers..." />
 
-        {/* Customer filters */}
+        {/* Server-side filters */}
         <div className="flex flex-wrap gap-3 mb-4">
           <select value={filterCustomerType} onChange={(e) => setFilterCustomerType(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
             <option value="">All Types</option>
             {CUSTOMER_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
           </select>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">All Statuses</option>
+            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
           <select value={filterCountry} onChange={(e) => setFilterCountry(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
             <option value="">All Countries</option>
-            {countryOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            {filterOptions.countries.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select value={filterBrand} onChange={(e) => setFilterBrand(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <option value="">All Brands</option>
-            {brandOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+          <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">All Sources</option>
+            {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          {(filterCustomerType || filterCountry || filterBrand) && (
-            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterBrand(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
+          {(filterCustomerType || filterCountry || filterStatus || filterSource) && (
+            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterStatus(""); setFilterSource(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
           )}
         </div>
 
@@ -411,7 +477,7 @@ export default function LeadsPage() {
             <thead className="bg-[#0B0F14]/80 border-b border-[#1F2937]">
               <tr className="text-left text-[#9CA3AF]">
                 <th className="px-5 py-3 font-medium w-10">
-                  <input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0} onChange={toggleSelectAll} className="rounded border-[#374151]" />
+                  <input type="checkbox" checked={selectedIds.size === customers.length && customers.length > 0} onChange={toggleSelectAll} className="rounded border-[#374151]" />
                 </th>
                 <SortHeader label="Name" sortKey="name" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
                 <th className="px-5 py-3 font-medium">Type</th>
@@ -423,9 +489,9 @@ export default function LeadsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1F2937]">
-              {filtered.length === 0 ? (
+              {customers.length === 0 ? (
                 <tr><td colSpan={9}><EmptyState icon="👤" title="No customers found" description="Try adjusting your search or filters, or add a new customer." /></td></tr>
-              ) : filtered.map((lead) => (
+              ) : customers.map((lead) => (
                 <tr key={lead.id} onClick={() => openDetailPanel(lead)} className={`cursor-pointer transition-colors ${selected?.id === lead.id ? "bg-blue-900/30" : "hover:bg-gray-800/50"}`}>
                   <td className="px-5 py-3.5" onClick={(e) => e.stopPropagation()}>
                     <input type="checkbox" checked={selectedIds.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-[#374151]" />
@@ -459,6 +525,32 @@ export default function LeadsPage() {
           </table>
           </div>
         </div>
+
+        {/* ── Pagination controls ───────────────────────────────────────── */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between mt-4 px-1">
+            <p className="text-xs text-gray-500">
+              Showing {startRow.toLocaleString()}–{endRow.toLocaleString()} of {total.toLocaleString()}
+            </p>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage(1)} disabled={page <= 1} className="px-2.5 py-1.5 text-xs rounded-lg border border-[#1F2937] text-gray-400 hover:bg-[#1F2937] disabled:opacity-30 disabled:cursor-not-allowed transition-colors">First</button>
+              <button onClick={() => setPage(page - 1)} disabled={page <= 1} className="px-2.5 py-1.5 text-xs rounded-lg border border-[#1F2937] text-gray-400 hover:bg-[#1F2937] disabled:opacity-30 disabled:cursor-not-allowed transition-colors">Prev</button>
+              {(() => {
+                const start = Math.max(1, page - 2);
+                const end = Math.min(totalPages, page + 2);
+                const pages = [];
+                for (let p = start; p <= end; p++) {
+                  pages.push(
+                    <button key={p} onClick={() => setPage(p)} className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${p === page ? "bg-blue-600 border-blue-600 text-white" : "border-[#1F2937] text-gray-400 hover:bg-[#1F2937]"}`}>{p}</button>
+                  );
+                }
+                return pages;
+              })()}
+              <button onClick={() => setPage(page + 1)} disabled={page >= totalPages} className="px-2.5 py-1.5 text-xs rounded-lg border border-[#1F2937] text-gray-400 hover:bg-[#1F2937] disabled:opacity-30 disabled:cursor-not-allowed transition-colors">Next</button>
+              <button onClick={() => setPage(totalPages)} disabled={page >= totalPages} className="px-2.5 py-1.5 text-xs rounded-lg border border-[#1F2937] text-gray-400 hover:bg-[#1F2937] disabled:opacity-30 disabled:cursor-not-allowed transition-colors">Last</button>
+            </div>
+          </div>
+        )}
         </>)}
       </main>
 
@@ -580,6 +672,7 @@ export default function LeadsPage() {
                         <button
                           onClick={() => {
                             updateLead(currentSelected.id, { ownerId: syncCandidate });
+                            setTimeout(() => fetchPage(), 300);
                           }}
                           className="mt-1.5 text-[11px] font-medium text-sky-300 hover:text-sky-100 bg-sky-800/40 hover:bg-sky-800/60 px-2.5 py-1 rounded-lg transition-colors"
                         >
@@ -948,6 +1041,16 @@ export default function LeadsPage() {
               <label className="block text-sm font-medium text-gray-300 mb-1">Expected Close</label>
               <input type="date" className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={dealForm.close} onChange={(e) => setDealForm({ ...dealForm, close: e.target.value })} />
             </div>
+            <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide pt-2 border-t border-[#1F2937]">Vehicle Details</p>
+            <div className="grid grid-cols-2 gap-3">
+              <LabeledInput label="Car Model" value={dealForm.carModel} onChange={(v) => setDealForm({ ...dealForm, carModel: v })} placeholder="e.g. BMW X5" />
+              <LabeledInput label="Year" value={dealForm.carYear} onChange={(v) => setDealForm({ ...dealForm, carYear: v })} placeholder="e.g. 2024" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <LabeledInput label="Price" value={dealForm.carPrice} onChange={(v) => setDealForm({ ...dealForm, carPrice: v })} placeholder="e.g. $45,000" />
+              <LabeledSelect label="Condition" value={dealForm.carCondition || "New"} onChange={(v) => setDealForm({ ...dealForm, carCondition: v })} options={CAR_CONDITION_OPTIONS} />
+            </div>
+            <LabeledInput label="VIN" value={dealForm.carVin} onChange={(v) => setDealForm({ ...dealForm, carVin: v })} placeholder="Vehicle Identification Number" />
             <p className="text-xs text-gray-500 bg-[#0B0F14] rounded-xl px-3 py-2">✓ Lead status will be updated to <strong>Converted</strong>.</p>
             <div className="flex justify-end gap-3 pt-2">
               <button onClick={() => setDealOpen(false)} className="px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
@@ -1040,8 +1143,14 @@ export default function LeadsPage() {
 
       {importOpen && (
         <ImportModal
-          config={customerImportConfig({ existing: leads, onAdd: addLead, onUpdate: updateLead })}
-          onClose={() => setImportOpen(false)}
+          config={customerImportConfig({
+            existing: [],
+            onAdd: async (record) => { await dbCreateLead(record, { title: `Contact lead: ${record.name}`, leadName: record.name, due: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }), priority: "High", done: false, auto: true }); },
+            onUpdate: async (id, updates) => { await serverUpdateLead(id, updates); },
+            onBulkBatch: async (batch) => { return dbBulkCreateLeads(batch); },
+            bulkApiRoute: "/api/import/customers",
+          })}
+          onClose={handleImportClose}
         />
       )}
     </div>

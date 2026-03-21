@@ -178,6 +178,163 @@ export async function dbGetAll(): Promise<{
   };
 }
 
+// ── PAGINATED LEADS (CUSTOMERS) QUERY ────────────────────────────────────────
+
+export type LeadsPageResult = {
+  leads: Lead[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export async function dbGetLeadsPaginated(opts: {
+  page?: number;
+  limit?: number;
+  query?: string;
+  status?: string;
+  customerType?: string;
+  country?: string;
+  source?: string;
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
+}): Promise<LeadsPageResult> {
+  const page = Math.max(1, opts.page ?? 1);
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const skip = (page - 1) * limit;
+
+  // Build where clause
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const where: Record<string, any> = {};
+
+  if (opts.query?.trim()) {
+    const q = opts.query.trim();
+    where.OR = [
+      { name: { contains: q, mode: "insensitive" } },
+      { email: { contains: q, mode: "insensitive" } },
+      { phone: { contains: q, mode: "insensitive" } },
+      { companyName: { contains: q, mode: "insensitive" } },
+      { country: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  if (opts.status && opts.status !== "all") {
+    where.status = opts.status;
+  }
+
+  if (opts.customerType && opts.customerType !== "all") {
+    where.customerType = opts.customerType;
+  }
+
+  if (opts.country && opts.country !== "all") {
+    where.country = opts.country;
+  }
+
+  if (opts.source && opts.source !== "all") {
+    where.source = opts.source;
+  }
+
+  // Build orderBy
+  const allowedSorts = ["name", "status", "source", "lastContact", "companyName", "country", "createdAt", "customerType"];
+  const sortField = opts.sortKey && allowedSorts.includes(opts.sortKey) ? opts.sortKey : "createdAt";
+  const sortDirection = opts.sortDir === "asc" ? "asc" : "desc";
+  const orderBy = { [sortField]: sortDirection };
+
+  const [rows, total] = await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.lead.findMany({ where: where as any, orderBy, skip, take: limit }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.lead.count({ where: where as any }),
+  ]);
+
+  return {
+    leads: rows.map(mapLead),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
+/** Get filter options (distinct countries, sources, statuses, customer types) without loading all leads */
+export async function dbGetLeadsFilterOptions(): Promise<{
+  countries: string[];
+  sources: string[];
+  statuses: string[];
+  customerTypes: string[];
+}> {
+  const [countryRows, sourceRows, statusRows, typeRows] = await Promise.all([
+    prisma.lead.findMany({ where: { country: { not: null } }, select: { country: true }, distinct: ["country"] }),
+    prisma.lead.findMany({ select: { source: true }, distinct: ["source"] }),
+    prisma.lead.findMany({ select: { status: true }, distinct: ["status"] }),
+    prisma.lead.findMany({ where: { customerType: { not: null } }, select: { customerType: true }, distinct: ["customerType"] }),
+  ]);
+  return {
+    countries: countryRows.map((r) => r.country!).filter(Boolean).sort(),
+    sources: sourceRows.map((r) => r.source).filter(Boolean).sort(),
+    statuses: statusRows.map((r) => r.status).filter(Boolean).sort(),
+    customerTypes: typeRows.map((r) => r.customerType!).filter(Boolean).sort(),
+  };
+}
+
+// ── BULK CREATE LEADS (for import — mirrors dbBulkCreateParts) ───────────────
+
+export async function dbBulkCreateLeads(
+  records: Omit<Lead, "id">[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  const SUB_BATCH = 50;
+  const MAX_RETRIES = 2;
+  let totalCreated = 0;
+  let totalSkipped = 0;
+
+  console.log(`[IMPORT] dbBulkCreateLeads called with ${records.length} records`);
+
+  for (let i = 0; i < records.length; i += SUB_BATCH) {
+    const chunk = records.slice(i, i + SUB_BATCH);
+    let success = false;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const result = await prisma.lead.createMany({
+          data: chunk.map((d) => ({
+            name: d.name || "", email: d.email || "", phone: d.phone || "",
+            status: d.status || "New", source: d.source || "Website",
+            lastContact: d.lastContact || "Today",
+            customerType: d.customerType || undefined,
+            companyName: d.companyName || undefined,
+            country: d.country || undefined,
+            preferredBrands: d.preferredBrands || undefined,
+            taxId: d.taxId || undefined,
+            shippingAddress: d.shippingAddress || undefined,
+            billingAddress: d.billingAddress || undefined,
+            paymentTerms: d.paymentTerms || undefined,
+            customerNotes: d.customerNotes || undefined,
+            ownerId: d.ownerId || undefined,
+          })),
+          skipDuplicates: true,
+        });
+        totalCreated += result.count;
+        totalSkipped += chunk.length - result.count;
+        success = true;
+        break;
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          console.warn(`[IMPORT] Sub-batch retry ${attempt + 1} for rows ${i + 1}–${i + chunk.length}`);
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        } else {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          console.error(`[IMPORT] Sub-batch failed after ${MAX_RETRIES + 1} attempts: ${msg}`);
+          return { created: totalCreated, skipped: totalSkipped, error: msg };
+        }
+      }
+    }
+
+    if (!success) break;
+  }
+
+  return { created: totalCreated, skipped: totalSkipped };
+}
+
 // ── LEADS ────────────────────────────────────────────────────────────────────
 
 export async function dbCreateLead(

@@ -44,6 +44,14 @@ model Lead {
   activities    Activity[]
   deals         Deal[]
   messages      Message[]
+
+  @@index([name])
+  @@index([status])
+  @@index([source])
+  @@index([customerType])
+  @@index([country])
+  @@index([createdAt])
+  @@index([companyName])
 }
 
 // ── Task ───────────────────────────────────────────────────────────────────────

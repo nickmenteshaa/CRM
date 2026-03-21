@@ -94,12 +94,19 @@ export default function ImportModal<T extends { id: string }>({
 
   // ── Parse file ─────────────────────────────────────────────────────────────
 
+  // Helper: yield to browser so React can repaint
+  const yieldToBrowser = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
   const parseFile = useCallback((file: File) => {
     setFileName(file.name);
     const reader = new FileReader();
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        setStep("importing");
+        setProgress({ processedRows: 0, totalRows: 1, imported: 0, skipped: 0, failed: 0, batchNum: 0, totalBatches: 0, phase: "Reading file...", elapsedMs: 0, avgBatchMs: 0 });
+        await yieldToBrowser();
+
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: "array" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
@@ -107,8 +114,12 @@ export default function ImportModal<T extends { id: string }>({
 
         if (jsonRows.length === 0) {
           alert("The file has no data rows.");
+          setStep("upload");
           return;
         }
+
+        setProgress((p) => ({ ...p, totalRows: jsonRows.length, phase: `Parsed ${jsonRows.length.toLocaleString()} rows. Validating...` }));
+        await yieldToBrowser();
 
         // Normalize header keys: lowercase + trim
         const fileHeaders = Object.keys(jsonRows[0]).map((h) => h.trim().toLowerCase());
@@ -129,55 +140,69 @@ export default function ImportModal<T extends { id: string }>({
         }
 
         // Skip client-side duplicate checking for large datasets when server handles it
-        const skipDupCheck = config.bulkSaveBatch && config.existingData.length === 0;
+        const skipDupCheck = (config.bulkSaveBatch || config.bulkApiRoute) && config.existingData.length === 0;
 
-        // Parse and validate each row
-        const parsed: ParsedRow[] = jsonRows.map((raw, idx) => {
-          const record: Record<string, string> = {};
-          const errors: { col: string; message: string }[] = [];
+        // Parse and validate rows in chunks to yield to browser
+        const VALIDATE_CHUNK = 500;
+        const parsed: ParsedRow[] = [];
 
-          for (const col of config.columns) {
-            const fileKey = keyMapping.get(col.key);
-            const value = fileKey ? String(raw[fileKey] ?? "").trim() : "";
-            record[col.key] = value;
+        for (let i = 0; i < jsonRows.length; i += VALIDATE_CHUNK) {
+          const chunkEnd = Math.min(i + VALIDATE_CHUNK, jsonRows.length);
 
-            // Required check
-            if (col.required && !value) {
-              errors.push({ col: col.label, message: `${col.label} is required` });
+          for (let j = i; j < chunkEnd; j++) {
+            const raw = jsonRows[j];
+            const record: Record<string, string> = {};
+            const errors: { col: string; message: string }[] = [];
+
+            for (const col of config.columns) {
+              const fileKey = keyMapping.get(col.key);
+              const value = fileKey ? String(raw[fileKey] ?? "").trim() : "";
+              record[col.key] = value;
+
+              if (col.required && !value) {
+                errors.push({ col: col.label, message: `${col.label} is required` });
+              }
+
+              if (value && col.validate) {
+                const err = col.validate(value);
+                if (err) errors.push({ col: col.label, message: err });
+              }
             }
 
-            // Custom validation
-            if (value && col.validate) {
-              const err = col.validate(value);
-              if (err) errors.push({ col: col.label, message: err });
+            if (config.validateRow) {
+              const rowErr = config.validateRow(record);
+              if (rowErr) errors.push({ col: "Row", message: rowErr });
             }
+
+            let dup: T | undefined;
+            if (!skipDupCheck) {
+              dup = config.findDuplicate(record, config.existingData);
+            }
+
+            parsed.push({
+              idx: j + 1,
+              raw: record,
+              errors,
+              isDuplicate: !!dup,
+              duplicateId: dup?.id,
+            });
           }
 
-          // Row-level validation
-          if (config.validateRow) {
-            const rowErr = config.validateRow(record);
-            if (rowErr) errors.push({ col: "Row", message: rowErr });
-          }
-
-          // Check duplicates (skip for bulk imports into empty DB — server handles via skipDuplicates)
-          let dup: T | undefined;
-          if (!skipDupCheck) {
-            dup = config.findDuplicate(record, config.existingData);
-          }
-
-          return {
-            idx: idx + 1,
-            raw: record,
-            errors,
-            isDuplicate: !!dup,
-            duplicateId: dup?.id,
-          };
-        });
+          // Yield after each chunk so React repaints
+          setProgress((p) => ({
+            ...p,
+            processedRows: chunkEnd,
+            totalRows: jsonRows.length,
+            phase: `Validating rows... ${chunkEnd.toLocaleString()} / ${jsonRows.length.toLocaleString()}`,
+          }));
+          await yieldToBrowser();
+        }
 
         setRows(parsed);
         setStep("preview");
       } catch {
         alert("Failed to parse file. Please check it is a valid .xlsx or .csv file.");
+        setStep("upload");
       }
     };
 
@@ -217,30 +242,38 @@ export default function ImportModal<T extends { id: string }>({
     result.failed = errRows.length;
     processedRows += errRows.length;
 
-    /** Emit progress — percentage = processedRows / totalRows */
-    function emit(phase: string, batchNum: number, totalBatches: number) {
+    /** Emit progress + yield so React repaints */
+    async function emit(phase: string, batchNum: number, totalBatches: number) {
       const elapsed = performance.now() - t0;
       const avg = batchTimings.length > 0 ? batchTimings.reduce((a, b) => a + b, 0) / batchTimings.length : 0;
       setProgress({ processedRows, totalRows, imported: result.imported, skipped: result.skipped, failed: result.failed, batchNum, totalBatches, phase, elapsedMs: elapsed, avgBatchMs: avg });
+      await yieldToBrowser();
     }
 
-    emit("Validating rows...", 0, 0);
-    await new Promise((r) => setTimeout(r, 0));
+    await emit("Validating rows...", 0, 0);
     if (cancelledRef.current) { done(); return; }
 
     // ── Bulk import: prefer API route, fall back to server action ──
     const useBulk = !!(config.bulkApiRoute || config.bulkSaveBatch);
     if (useBulk && validNewRows.length > 0) {
-      emit("Preparing records...", 0, 0);
-      await new Promise((r) => setTimeout(r, 0));
-      const records = validNewRows.map((r) => config.buildRecord(r.raw));
+      // Build records in chunks to avoid blocking
+      const BUILD_CHUNK = 500;
+      const records: Omit<T, "id">[] = [];
+      for (let i = 0; i < validNewRows.length; i += BUILD_CHUNK) {
+        const chunkEnd = Math.min(i + BUILD_CHUNK, validNewRows.length);
+        for (let j = i; j < chunkEnd; j++) {
+          records.push(config.buildRecord(validNewRows[j].raw));
+        }
+        await emit(`Preparing records... ${chunkEnd.toLocaleString()} / ${validNewRows.length.toLocaleString()}`, 0, 0);
+      }
+
       const totalBatches = Math.ceil(records.length / BATCH_SIZE);
 
       for (let i = 0; i < records.length; i += BATCH_SIZE) {
         if (cancelledRef.current) { errors.push("Cancelled by user"); break; }
         const batchNum = Math.floor(i / BATCH_SIZE) + 1;
         const batch = records.slice(i, i + BATCH_SIZE);
-        emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
+        await emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
 
         const bt0 = performance.now();
         let br: { created: number; skipped: number; error?: string };
@@ -274,7 +307,7 @@ export default function ImportModal<T extends { id: string }>({
           result.skipped += br.skipped;
         }
         processedRows += batch.length;
-        emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
+        await emit(`Wrote batch ${batchNum} of ${totalBatches}`, batchNum, totalBatches);
       }
     } else if (validNewRows.length > 0) {
       // ── Row-by-row fallback ──
@@ -287,7 +320,7 @@ export default function ImportModal<T extends { id: string }>({
         catch (err) { result.failed++; errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Failed"}`); }
         batchTimings.push(performance.now() - bt0);
         processedRows++;
-        if ((i + 1) % 10 === 0 || i === total - 1) emit("Writing to database...", i + 1, total);
+        if ((i + 1) % 10 === 0 || i === total - 1) await emit("Writing to database...", i + 1, total);
       }
     }
 
@@ -299,7 +332,7 @@ export default function ImportModal<T extends { id: string }>({
         try { await config.saveUpdate(row.duplicateId!, config.buildRecord(row.raw) as Partial<T>); result.updated++; }
         catch (err) { result.failed++; errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Update failed"}`); }
         processedRows++;
-        if ((i + 1) % 10 === 0 || i === dupRows.length - 1) emit("Updating duplicates...", i + 1, dupRows.length);
+        if ((i + 1) % 10 === 0 || i === dupRows.length - 1) await emit("Updating duplicates...", i + 1, dupRows.length);
       }
     } else if (!cancelledRef.current) {
       result.skipped += dupRows.length;
@@ -353,6 +386,7 @@ export default function ImportModal<T extends { id: string }>({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
+          <p className="text-xs font-bold text-red-500 bg-red-900/30 px-2 py-1 rounded mb-2">IMPORT MODAL BUILD MARKER 1</p>
           {/* ── Step: Upload ──────────────────────────────────────────────── */}
           {step === "upload" && (
             <div className="space-y-6">
@@ -591,6 +625,7 @@ export default function ImportModal<T extends { id: string }>({
           {step === "importing" && (
             <div className="space-y-4 py-4">
               {/* Debug marker */}
+              <p className="text-center text-xs font-bold text-red-500 bg-red-900/30 rounded-lg py-1">IMPORT PROGRESS BUILD MARKER 1</p>
               <p className="text-center text-xs font-bold text-green-400 bg-green-900/20 rounded-lg py-1">PROGRESS UI ACTIVE — {Math.floor((progress.processedRows / (progress.totalRows || 1)) * 100)}% — {progress.processedRows.toLocaleString()}/{progress.totalRows.toLocaleString()} rows — batch {progress.batchNum}/{progress.totalBatches}</p>
               {/* File info */}
               <div className="flex items-center gap-2 px-1">
@@ -646,7 +681,7 @@ export default function ImportModal<T extends { id: string }>({
                 {progress.avgBatchMs > 0 && <span>Avg/batch: {(progress.avgBatchMs / 1000).toFixed(2)}s</span>}
                 {progress.avgBatchMs > 0 && progress.processedRows < progress.totalRows && (() => {
                   const rowsLeft = progress.totalRows - progress.processedRows;
-                  const batchesLeft = Math.ceil(rowsLeft / 500);
+                  const batchesLeft = Math.ceil(rowsLeft / BATCH_SIZE);
                   return <span>ETA: ~{((batchesLeft * progress.avgBatchMs) / 1000).toFixed(0)}s</span>;
                 })()}
               </div>
@@ -673,8 +708,8 @@ export default function ImportModal<T extends { id: string }>({
                   <p className="text-xs text-gray-500">Imported</p>
                 </div>
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
-                  <p className="text-2xl font-bold text-yellow-400">{(summary.updated > 0 ? summary.updated : summary.skipped).toLocaleString()}</p>
-                  <p className="text-xs text-gray-500">{summary.updated > 0 ? "Updated" : "Skipped"}</p>
+                  <p className="text-2xl font-bold text-yellow-400">{(summary.updated + summary.skipped).toLocaleString()}</p>
+                  <p className="text-xs text-gray-500">{summary.updated > 0 && summary.skipped > 0 ? `${summary.updated.toLocaleString()} Updated / ${summary.skipped.toLocaleString()} Skipped` : summary.updated > 0 ? "Updated" : "Skipped"}</p>
                 </div>
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
                   <p className="text-2xl font-bold text-red-400">{summary.failed.toLocaleString()}</p>
@@ -690,7 +725,7 @@ export default function ImportModal<T extends { id: string }>({
                 </div>
                 {timing.batchCount > 1 && (
                   <div className="flex items-center justify-between text-xs mt-1">
-                    <span className="text-gray-400">Avg per batch ({timing.batchCount} batches × 500 rows)</span>
+                    <span className="text-gray-400">Avg per batch ({timing.batchCount} batches × {BATCH_SIZE} rows)</span>
                     <span className="text-gray-200 font-medium">{(timing.avgBatchMs / 1000).toFixed(2)}s</span>
                   </div>
                 )}

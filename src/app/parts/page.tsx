@@ -392,6 +392,7 @@ export default function PartsPage() {
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-[#F9FAFB]">Parts Catalog</h2>
+                <p className="text-xs font-bold text-red-500 bg-red-900/30 px-2 py-1 rounded">PARTS BUILD MARKER 1</p>
                 <p className="text-sm text-[#9CA3AF] mt-1">
                   {total.toLocaleString()} total parts
                   {fetching && <span className="ml-2 text-blue-400 animate-pulse">Loading...</span>}

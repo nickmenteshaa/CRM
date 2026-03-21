@@ -74,8 +74,10 @@ const VALID_CUSTOMER_TYPES = ["individual", "workshop", "dealer", "distributor"]
 
 export function customerImportConfig(opts: {
   existing: Lead[];
-  onAdd: (l: Omit<Lead, "id">) => void;
-  onUpdate: (id: string, l: Partial<Lead>) => void;
+  onAdd: (l: Omit<Lead, "id">) => Promise<void> | void;
+  onUpdate: (id: string, l: Partial<Lead>) => Promise<void> | void;
+  onBulkBatch?: (batch: Omit<Lead, "id">[]) => Promise<{ created: number; skipped: number; error?: string }>;
+  bulkApiRoute?: string;
 }): ImportConfig<Lead> {
   return {
     moduleName: "Customers",
@@ -131,8 +133,10 @@ export function customerImportConfig(opts: {
       }
       return undefined;
     },
-    saveNew: (record) => opts.onAdd(record),
-    saveUpdate: (id, record) => opts.onUpdate(id, record as Partial<Lead>),
+    saveNew: async (record) => { await opts.onAdd(record); },
+    saveUpdate: async (id, record) => { await opts.onUpdate(id, record as Partial<Lead>); },
+    bulkSaveBatch: opts.onBulkBatch,
+    bulkApiRoute: opts.bulkApiRoute,
   };
 }
 
