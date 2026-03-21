@@ -5,9 +5,12 @@ import { cookies } from "next/headers";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Accept EITHER resolved IDs OR raw orderNumber+sku for server-side resolution
 type OrderItemRecord = {
-  dealId: string;
-  partId: string;
+  dealId?: string;
+  partId?: string;
+  orderNumber?: string;
+  sku?: string;
   quantity: number;
   unitPrice?: string;
   discount?: string;
@@ -49,35 +52,105 @@ export async function POST(request: NextRequest) {
   console.log(`[IMPORT-API] Order Items: received ${records.length} records`);
 
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
-  let totalCreated = 0;
-  let totalSkipped = 0;
 
   try {
-    for (let i = 0; i < records.length; i += SUB_BATCH) {
-      const chunk = records.slice(i, i + SUB_BATCH);
+    // ── Build server-side lookup maps ──────────────────────────────────
+    const [allOrders, allParts] = await Promise.all([
+      prisma.deal.findMany({ select: { id: true, orderNumber: true } }),
+      prisma.part.findMany({ select: { id: true, sku: true } }),
+    ]);
 
-      const result = await prisma.orderLine.createMany({
-        data: chunk.map((d) => ({
-          dealId: d.dealId,
-          partId: d.partId,
-          quantity: d.quantity,
-          unitPrice: d.unitPrice || null,
-          discount: d.discount || null,
-          lineTotal: d.lineTotal || null,
-        })),
-        skipDuplicates: true,
-      });
-
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
+    const orderMap = new Map<string, string>();
+    for (const o of allOrders) {
+      if (o.orderNumber) {
+        orderMap.set(o.orderNumber.trim().toLowerCase(), o.id);
+      }
     }
 
+    const skuMap = new Map<string, string>();
+    for (const p of allParts) {
+      skuMap.set(p.sku.trim().toLowerCase(), p.id);
+    }
+
+    console.log(`[IMPORT-API] Lookup maps: ${orderMap.size} orders, ${skuMap.size} parts`);
+
+    // ── Resolve and filter rows ───────────────────────────────────────
+    type ValidRow = {
+      dealId: string;
+      partId: string;
+      quantity: number;
+      unitPrice: string | null;
+      discount: string | null;
+      lineTotal: string | null;
+    };
+
+    const validRows: ValidRow[] = [];
+    let skippedNoOrder = 0;
+    let skippedNoPart = 0;
+
+    for (const d of records) {
+      // Resolve dealId: prefer pre-resolved, fallback to orderNumber lookup
+      let dealId = d.dealId;
+      if (!dealId || dealId === "") {
+        const orderNum = d.orderNumber?.trim().toLowerCase() ?? "";
+        dealId = orderMap.get(orderNum) ?? "";
+      }
+
+      // Resolve partId: prefer pre-resolved, fallback to SKU lookup
+      let partId = d.partId;
+      if (!partId || partId === "") {
+        const sku = d.sku?.trim().toLowerCase() ?? "";
+        partId = skuMap.get(sku) ?? "";
+      }
+
+      if (!dealId) {
+        skippedNoOrder++;
+        continue;
+      }
+      if (!partId) {
+        skippedNoPart++;
+        continue;
+      }
+
+      validRows.push({
+        dealId,
+        partId,
+        quantity: Number(d.quantity) || 1,
+        unitPrice: d.unitPrice || null,
+        discount: d.discount || null,
+        lineTotal: d.lineTotal || null,
+      });
+    }
+
+    console.log(`[IMPORT-API] Valid rows: ${validRows.length}, skipped (no order): ${skippedNoOrder}, skipped (no part): ${skippedNoPart}`);
+
+    // ── Batch insert ──────────────────────────────────────────────────
+    const SUB_BATCH = 50;
+    let totalCreated = 0;
+
+    for (let i = 0; i < validRows.length; i += SUB_BATCH) {
+      const chunk = validRows.slice(i, i + SUB_BATCH);
+      const result = await prisma.orderLine.createMany({
+        data: chunk,
+        skipDuplicates: true,
+      });
+      totalCreated += result.count;
+    }
+
+    const totalSkipped = records.length - totalCreated;
     const elapsed = Math.round(performance.now() - t0);
-    return NextResponse.json({ created: totalCreated, skipped: totalSkipped, timeMs: elapsed });
+
+    return NextResponse.json({
+      created: totalCreated,
+      skipped: totalSkipped,
+      skippedNoOrder,
+      skippedNoPart,
+      totalValid: validRows.length,
+      timeMs: elapsed,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown DB error";
     try { await prisma.$disconnect(); } catch { /* ignore */ }
-    return NextResponse.json({ created: totalCreated, skipped: totalSkipped, error: msg }, { status: 500 });
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

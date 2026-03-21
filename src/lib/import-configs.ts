@@ -526,11 +526,15 @@ export function orderItemImportConfig(opts: {
     duplicateKey: "Order Number + SKU",
     existingData: opts.existing,
     validateRow: (row) => {
-      if (row.orderNumber && !orderByNum.has(row.orderNumber.trim().toLowerCase())) {
-        return `Order "${row.orderNumber}" not found`;
-      }
-      if (row.sku && !partBySku.has(row.sku.trim().toLowerCase())) {
-        return `Part SKU "${row.sku}" not found`;
+      // When using bulkApiRoute, server resolves orderNumber→dealId and sku→partId
+      // so skip client-side lookup (client only has current paginated page)
+      if (!opts.bulkApiRoute) {
+        if (row.orderNumber && !orderByNum.has(row.orderNumber.trim().toLowerCase())) {
+          return `Order "${row.orderNumber}" not found`;
+        }
+        if (row.sku && !partBySku.has(row.sku.trim().toLowerCase())) {
+          return `Part SKU "${row.sku}" not found`;
+        }
       }
       return null;
     },
@@ -541,6 +545,9 @@ export function orderItemImportConfig(opts: {
       return {
         dealId: order?.id ?? "",
         partId: part?.id ?? "",
+        // Pass raw orderNumber + sku so API route can resolve server-side
+        orderNumber: row.orderNumber?.trim() ?? "",
+        sku: row.sku?.trim() ?? "",
         quantity: Number(row.quantity) || 1,
         unitPrice: row.unitPrice || undefined,
         discount: row.discount || undefined,
