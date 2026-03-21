@@ -129,7 +129,93 @@ function mapOrderLine(r: {
   };
 }
 
-// ── READS (bulk) ─────────────────────────────────────────────────────────────
+// ── PAGINATED PARTS QUERY ────────────────────────────────────────────────────
+
+export type PartsPageResult = {
+  parts: Part[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+export async function dbGetPartsPaginated(opts: {
+  page?: number;
+  limit?: number;
+  query?: string;
+  categoryId?: string;
+  brand?: string;
+  isActive?: "all" | "active" | "inactive";
+  sortKey?: string;
+  sortDir?: "asc" | "desc";
+}): Promise<PartsPageResult> {
+  const page = Math.max(1, opts.page ?? 1);
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const skip = (page - 1) * limit;
+
+  // Build where clause
+  const where: Record<string, unknown> = {};
+
+  if (opts.query?.trim()) {
+    const q = opts.query.trim();
+    where.OR = [
+      { name: { contains: q, mode: "insensitive" } },
+      { sku: { contains: q, mode: "insensitive" } },
+      { oemNumber: { contains: q, mode: "insensitive" } },
+      { brand: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  if (opts.categoryId && opts.categoryId !== "all") {
+    where.categoryId = opts.categoryId;
+  }
+
+  if (opts.brand && opts.brand !== "all") {
+    where.brand = opts.brand;
+  }
+
+  if (opts.isActive === "active") {
+    where.isActive = true;
+  } else if (opts.isActive === "inactive") {
+    where.isActive = false;
+  }
+
+  // Build orderBy
+  const allowedSorts = ["sku", "name", "brand", "unitPrice", "createdAt"];
+  const sortField = opts.sortKey && allowedSorts.includes(opts.sortKey) ? opts.sortKey : "createdAt";
+  const sortDirection = opts.sortDir === "asc" ? "asc" : "desc";
+  const orderBy = { [sortField]: sortDirection };
+
+  const [rows, total] = await Promise.all([
+    prisma.part.findMany({ where: where as any, orderBy, skip, take: limit }),
+    prisma.part.count({ where: where as any }),
+  ]);
+
+  return {
+    parts: rows.map(mapPart),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
+/** Get filter options (brands list + categories) without loading all parts */
+export async function dbGetPartsFilterOptions(): Promise<{
+  categories: PartCategory[];
+  brands: string[];
+}> {
+  const [categories, brandRows] = await Promise.all([
+    prisma.category.findMany({ orderBy: { name: "asc" } }),
+    prisma.part.findMany({ where: { brand: { not: null } }, select: { brand: true }, distinct: ["brand"] }),
+  ]);
+  return {
+    categories: categories.map(mapCategory),
+    brands: brandRows.map((r) => r.brand!).sort(),
+  };
+}
+
+// ── READS (bulk — used by other pages like inventory/suppliers) ──────────────
 
 export async function dbGetSparePartsData(): Promise<{
   parts: Part[];

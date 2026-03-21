@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import PageLoading from "@/components/PageLoading";
@@ -10,7 +10,8 @@ import { useAuth } from "@/context/AuthContext";
 import ImportModal from "@/components/ImportModal";
 import { partImportConfig } from "@/lib/import-configs";
 import {
-  dbGetSparePartsData,
+  dbGetPartsPaginated,
+  dbGetPartsFilterOptions,
   dbCreatePart,
   dbUpdatePart,
   dbDeletePart,
@@ -97,19 +98,29 @@ const emptyForm = {
   unitPrice: "", costPrice: "", isActive: true,
 };
 
+const PAGE_SIZE = 50;
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function PartsPage() {
   const { isAdmin } = useAuth();
   const [parts, setParts] = useState<Part[]>([]);
   const [categories, setCategories] = useState<PartCategory[]>([]);
+  const [brands, setBrands] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
+
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [fetching, setFetching] = useState(false);
 
   // Selection & UI state
   const [selected, setSelected] = useState<Part | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   // Filters
   const [filterCategory, setFilterCategory] = useState("all");
@@ -131,77 +142,60 @@ export default function PartsPage() {
   const [depsLoading, setDepsLoading] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
-  // ── Load data ──────────────────────────────────────────────────────────
+  // ── Debounce search ─────────────────────────────────────────────────────
 
-  const loadData = useCallback(async () => {
-    try {
-      const data = await dbGetSparePartsData();
-      setParts(data.parts ?? []);
-      setCategories(data.categories ?? []);
-    } catch (err) {
-      console.error("[PartsPage] load failed:", err);
-    } finally {
-      setLoaded(true);
-    }
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1); // reset to page 1 on new search
+    }, 350);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [query]);
+
+  // ── Load filter options (categories, brands) on mount ───────────────────
+
+  useEffect(() => {
+    dbGetPartsFilterOptions().then((opts) => {
+      setCategories(opts.categories ?? []);
+      setBrands(opts.brands ?? []);
+    }).catch(() => {});
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  // ── Fetch parts page ──────────────────────────────────────────────────
 
-  // ── Derived data ───────────────────────────────────────────────────────
-
-  const brands = useMemo(() => {
-    const set = new Set(parts.map((p) => p.brand).filter(Boolean) as string[]);
-    return Array.from(set).sort();
-  }, [parts]);
-
-  const categoryMap = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const c of categories) m[c.id] = c.name;
-    return m;
-  }, [categories]);
-
-  // ── Search + Filter + Sort ─────────────────────────────────────────────
-
-  const filtered = useMemo(() => {
-    let result = [...parts];
-
-    // Text search across search fields
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      result = result.filter((p) =>
-        SEARCH_FIELDS.some((f) =>
-          String(p[f.key] ?? "").toLowerCase().includes(q)
-        )
-      );
-    }
-
-    // Category filter
-    if (filterCategory !== "all") {
-      result = result.filter((p) => p.categoryId === filterCategory);
-    }
-
-    // Brand filter
-    if (filterBrand !== "all") {
-      result = result.filter((p) => p.brand === filterBrand);
-    }
-
-    // Active filter
-    if (filterActive === "active") result = result.filter((p) => p.isActive !== false);
-    if (filterActive === "inactive") result = result.filter((p) => p.isActive === false);
-
-    // Sort
-    if (sortKey) {
-      result.sort((a, b) => {
-        const av = String(a[sortKey] ?? "").toLowerCase();
-        const bv = String(b[sortKey] ?? "").toLowerCase();
-        if (av < bv) return sortDir === "asc" ? -1 : 1;
-        if (av > bv) return sortDir === "asc" ? 1 : -1;
-        return 0;
+  const fetchPage = useCallback(async () => {
+    setFetching(true);
+    try {
+      const result = await dbGetPartsPaginated({
+        page,
+        limit: PAGE_SIZE,
+        query: debouncedQuery || undefined,
+        categoryId: filterCategory !== "all" ? filterCategory : undefined,
+        brand: filterBrand !== "all" ? filterBrand : undefined,
+        isActive: filterActive,
+        sortKey: sortKey ?? "createdAt",
+        sortDir: sortDir,
       });
+      setParts(result.parts ?? []);
+      setTotal(result.total);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error("[PartsPage] fetch failed:", err);
+    } finally {
+      setFetching(false);
+      setLoaded(true);
     }
+  }, [page, debouncedQuery, filterCategory, filterBrand, filterActive, sortKey, sortDir]);
 
-    return result;
-  }, [parts, query, filterCategory, filterBrand, filterActive, sortKey, sortDir]);
+  useEffect(() => { fetchPage(); }, [fetchPage]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => { setPage(1); }, [filterCategory, filterBrand, filterActive]);
+
+  // ── Sort handler ────────────────────────────────────────────────────────
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -210,7 +204,13 @@ export default function PartsPage() {
       setSortKey(key);
       setSortDir("asc");
     }
+    setPage(1);
   }
+
+  // ── Pagination helpers ──────────────────────────────────────────────────
+
+  const startRow = (page - 1) * PAGE_SIZE + 1;
+  const endRow = Math.min(page * PAGE_SIZE, total);
 
   // ── CRUD handlers ──────────────────────────────────────────────────────
 
@@ -218,11 +218,10 @@ export default function PartsPage() {
     const errors: Record<string, string> = {};
     if (!addForm.sku.trim()) errors.sku = "SKU is required";
     if (!addForm.name.trim()) errors.name = "Name is required";
-    if (parts.some((p) => p.sku === addForm.sku.trim())) errors.sku = "SKU already exists";
     if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
     setFormErrors({});
 
-    const created = await dbCreatePart({
+    await dbCreatePart({
       ...addForm,
       sku: addForm.sku.trim(),
       name: addForm.name.trim(),
@@ -240,9 +239,9 @@ export default function PartsPage() {
       unitPrice: addForm.unitPrice || undefined,
       costPrice: addForm.costPrice || undefined,
     });
-    setParts((prev) => [created, ...prev]);
     setAddForm(emptyForm);
     setAddOpen(false);
+    fetchPage(); // reload current page
   }
 
   function openEdit(part: Part) {
@@ -288,17 +287,17 @@ export default function PartsPage() {
       costPrice: editForm.costPrice || undefined,
       isActive: editForm.isActive,
     });
-    setParts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     if (selected?.id === updated.id) setSelected(updated);
     setEditOpen(false);
+    fetchPage();
   }
 
   async function handleDelete() {
     if (!selected) return;
     await dbDeletePart(selected.id);
-    setParts((prev) => prev.filter((p) => p.id !== selected.id));
     setSelected(null);
     setDeleteConfirm(false);
+    fetchPage();
   }
 
   async function handleAddCategory() {
@@ -317,45 +316,41 @@ export default function PartsPage() {
   const currentPart = selected ? parts.find((p) => p.id === selected.id) ?? selected : null;
 
   function openDetailPanel(part: Part) {
-    setSelected(part.id === selected?.id ? null : part);
+    setSelected(part);
   }
 
-  // ── Part form fields (shared between add/edit) ─────────────────────────
+  // ── Form fields component ──────────────────────────────────────────────
 
-  function PartFormFields({ form, setForm }: {
-    form: typeof emptyForm;
-    setForm: (f: typeof emptyForm) => void;
-  }) {
+  const categoryMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of categories) m[c.id] = c.name;
+    return m;
+  }, [categories]);
+
+  function PartFormFields({ form, setForm }: { form: typeof emptyForm; setForm: (f: typeof emptyForm) => void }) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+        <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide">Identification</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <LabeledInput label="SKU *" value={form.sku} onChange={(v) => { setForm({ ...form, sku: v }); setFormErrors((e) => { const { sku: _, ...rest } = e; return rest; }); }} placeholder="e.g. BRK-PAD-001" />
-            {formErrors.sku && <p className="text-xs text-red-500 mt-1">{formErrors.sku}</p>}
-          </div>
-          <div>
-            <LabeledInput label="Name *" value={form.name} onChange={(v) => { setForm({ ...form, name: v }); setFormErrors((e) => { const { name: _, ...rest } = e; return rest; }); }} placeholder="e.g. Front Brake Pad Set" />
-            {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
-          </div>
+          <LabeledInput label="SKU *" value={form.sku} onChange={(v) => setForm({ ...form, sku: v })} placeholder="e.g. BRK-PAD-001" />
+          <LabeledInput label="Name *" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="e.g. Brake Pad Set" />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <LabeledInput label="OEM Number" value={form.oemNumber} onChange={(v) => setForm({ ...form, oemNumber: v })} placeholder="e.g. 34116850568" />
-          <LabeledInput label="Brand" value={form.brand} onChange={(v) => setForm({ ...form, brand: v })} placeholder="e.g. Bosch" />
+          <LabeledInput label="OEM Number" value={form.oemNumber} onChange={(v) => setForm({ ...form, oemNumber: v })} placeholder="e.g. 04465-33471" />
+          <LabeledInput label="Brand" value={form.brand} onChange={(v) => setForm({ ...form, brand: v })} placeholder="e.g. Toyota" />
         </div>
         <LabeledSelect
           label="Category"
           value={form.categoryId}
           onChange={(v) => setForm({ ...form, categoryId: v })}
-          options={[{ value: "", label: "— No category —" }, ...categories.map((c) => ({ value: c.id, label: c.name }))]}
+          options={[{ value: "", label: "— No Category —" }, ...categories.map((c) => ({ value: c.id, label: c.name }))]}
         />
-        <LabeledInput label="Description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Optional description" />
+        <LabeledInput label="Description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Optional" />
 
         <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide pt-2 border-t border-[#1F2937]">Vehicle Compatibility</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <LabeledInput label="Make" value={form.compatMake} onChange={(v) => setForm({ ...form, compatMake: v })} placeholder="e.g. Toyota" />
           <LabeledInput label="Model" value={form.compatModel} onChange={(v) => setForm({ ...form, compatModel: v })} placeholder="e.g. Camry" />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <LabeledInput label="Year From" value={form.compatYearFrom} onChange={(v) => setForm({ ...form, compatYearFrom: v })} placeholder="e.g. 2018" />
           <LabeledInput label="Year To" value={form.compatYearTo} onChange={(v) => setForm({ ...form, compatYearTo: v })} placeholder="e.g. 2024" />
         </div>
@@ -397,7 +392,10 @@ export default function PartsPage() {
             <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-[#F9FAFB]">Parts Catalog</h2>
-                <p className="text-sm text-[#9CA3AF] mt-1">{filtered.length} of {parts.length} parts</p>
+                <p className="text-sm text-[#9CA3AF] mt-1">
+                  {total.toLocaleString()} total parts
+                  {fetching && <span className="ml-2 text-blue-400 animate-pulse">Loading...</span>}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 {isAdmin && (
@@ -494,7 +492,7 @@ export default function PartsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1F2937]">
-                    {filtered.length === 0 ? (
+                    {parts.length === 0 ? (
                       <tr>
                         <td colSpan={7}>
                           <EmptyState
@@ -505,7 +503,7 @@ export default function PartsPage() {
                           />
                         </td>
                       </tr>
-                    ) : filtered.map((part) => (
+                    ) : parts.map((part) => (
                       <tr
                         key={part.id}
                         onClick={() => openDetailPanel(part)}
@@ -534,6 +532,67 @@ export default function PartsPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination controls */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between px-5 py-3 border-t border-[#1F2937] bg-[#0B0F14]/50">
+                  <p className="text-xs text-gray-500">
+                    Showing {startRow.toLocaleString()}–{endRow.toLocaleString()} of {total.toLocaleString()}
+                  </p>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setPage(1)}
+                      disabled={page <= 1}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#1F2937] rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      ««
+                    </button>
+                    <button
+                      onClick={() => setPage(page - 1)}
+                      disabled={page <= 1}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#1F2937] rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      ‹ Prev
+                    </button>
+
+                    {/* Page numbers */}
+                    {(() => {
+                      const pages: number[] = [];
+                      const start = Math.max(1, page - 2);
+                      const end = Math.min(totalPages, page + 2);
+                      for (let i = start; i <= end; i++) pages.push(i);
+                      return pages.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setPage(p)}
+                          className={`w-8 h-8 text-xs rounded transition-colors ${
+                            p === page
+                              ? "bg-blue-600 text-white font-medium"
+                              : "text-gray-400 hover:text-gray-200 hover:bg-[#1F2937]"
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ));
+                    })()}
+
+                    <button
+                      onClick={() => setPage(page + 1)}
+                      disabled={page >= totalPages}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#1F2937] rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      Next ›
+                    </button>
+                    <button
+                      onClick={() => setPage(totalPages)}
+                      disabled={page >= totalPages}
+                      className="px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#1F2937] rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      »»
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -701,12 +760,10 @@ export default function PartsPage() {
             existing: parts,
             onAdd: async (record) => {
               const created = await dbCreatePart(record);
-              setParts((prev) => [created, ...prev]);
               return created;
             },
             onUpdate: async (id, updates) => {
               const updated = await dbUpdatePart(id, updates);
-              setParts((prev) => prev.map((p) => (p.id === id ? updated : p)));
               return updated;
             },
             onBulkBatch: async (batch) => {
@@ -714,7 +771,7 @@ export default function PartsPage() {
             },
             bulkApiRoute: "/api/import/parts",
           })}
-          onClose={() => { setImportOpen(false); loadData(); }}
+          onClose={() => { setImportOpen(false); fetchPage(); }}
         />
       )}
     </div>

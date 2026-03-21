@@ -178,6 +178,12 @@ model Part {
   inventoryItems  Inventory[]
   orderLines      OrderLine[]
   supplierParts   SupplierPart[]
+
+  @@index([name])
+  @@index([brand])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([createdAt])
 }
 
 // ── Category (Part categories, supports nesting) ────────────────────────────
