@@ -29,6 +29,12 @@ export type ImportConfig<T> = {
   existingData: T[];
   /** Optional row-level validation (e.g. "name OR company required") */
   validateRow?: (row: Record<string, string>) => string | null;
+  /**
+   * Optional: write a single DB batch (e.g. 500 rows). The ImportModal
+   * calls this in a loop, updating progress after every call. This gives
+   * granular, real-time progress based on actual completed DB writes.
+   */
+  bulkSaveBatch?: (batch: Omit<T, "id">[]) => Promise<{ created: number; skipped: number; error?: string }>;
 };
 
 type ParsedRow = {
@@ -39,7 +45,7 @@ type ParsedRow = {
   duplicateId?: string;
 };
 
-type ImportStep = "upload" | "preview" | "importing" | "done";
+type ImportStep = "upload" | "preview" | "importing" | "done" | "dry-run";
 
 type DuplicateAction = "skip" | "update";
 
@@ -72,6 +78,15 @@ export default function ImportModal<T extends { id: string }>({
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // ── Progress tracking ───────────────────────────────────────────────────
+  const [progress, setProgress] = useState({
+    processedRows: 0, totalRows: 0,
+    imported: 0, skipped: 0, failed: 0,
+    batchNum: 0, totalBatches: 0,
+    phase: "", elapsedMs: 0, avgBatchMs: 0,
+  });
+  const cancelledRef = useRef(false);
 
   // ── Parse file ─────────────────────────────────────────────────────────────
 
@@ -109,6 +124,9 @@ export default function ImportModal<T extends { id: string }>({
           }
         }
 
+        // Skip client-side duplicate checking for large datasets when server handles it
+        const skipDupCheck = config.bulkSaveBatch && config.existingData.length === 0;
+
         // Parse and validate each row
         const parsed: ParsedRow[] = jsonRows.map((raw, idx) => {
           const record: Record<string, string> = {};
@@ -137,8 +155,11 @@ export default function ImportModal<T extends { id: string }>({
             if (rowErr) errors.push({ col: "Row", message: rowErr });
           }
 
-          // Check duplicates
-          const dup = config.findDuplicate(record, config.existingData);
+          // Check duplicates (skip for bulk imports into empty DB — server handles via skipDuplicates)
+          let dup: T | undefined;
+          if (!skipDupCheck) {
+            dup = config.findDuplicate(record, config.existingData);
+          }
 
           return {
             idx: idx + 1,
@@ -173,50 +194,105 @@ export default function ImportModal<T extends { id: string }>({
 
   // ── Import ─────────────────────────────────────────────────────────────────
 
+  const [timing, setTiming] = useState({ totalMs: 0, avgBatchMs: 0, batchCount: 0 });
+  const BATCH_SIZE = 500; // rows per DB write — gives granular progress (20 updates for 10k rows)
+
   const handleImport = async () => {
+    cancelledRef.current = false;
     setStep("importing");
+    const t0 = performance.now();
     const result = { total: rows.length, imported: 0, updated: 0, skipped: 0, failed: 0 };
     const errors: string[] = [];
+    const batchTimings: number[] = [];
+    let processedRows = 0;
+    const totalRows = rows.length;
 
-    for (const row of rows) {
-      // Skip rows with validation errors
-      if (row.errors.length > 0) {
-        result.failed++;
-        continue;
-      }
+    const validNewRows = rows.filter((r) => r.errors.length === 0 && !r.isDuplicate);
+    const dupRows = rows.filter((r) => r.errors.length === 0 && r.isDuplicate);
+    const errRows = rows.filter((r) => r.errors.length > 0);
+    result.failed = errRows.length;
+    processedRows += errRows.length;
 
-      // Handle duplicates
-      if (row.isDuplicate) {
-        if (dupAction === "skip") {
-          result.skipped++;
-          continue;
+    /** Emit progress — percentage = processedRows / totalRows */
+    function emit(phase: string, batchNum: number, totalBatches: number) {
+      const elapsed = performance.now() - t0;
+      const avg = batchTimings.length > 0 ? batchTimings.reduce((a, b) => a + b, 0) / batchTimings.length : 0;
+      setProgress({ processedRows, totalRows, imported: result.imported, skipped: result.skipped, failed: result.failed, batchNum, totalBatches, phase, elapsedMs: elapsed, avgBatchMs: avg });
+    }
+
+    emit("Validating rows...", 0, 0);
+    await new Promise((r) => setTimeout(r, 0));
+    if (cancelledRef.current) { done(); return; }
+
+    // ── Bulk batch-by-batch (500 rows each → progress updates 20× for 10k) ──
+    if (config.bulkSaveBatch && validNewRows.length > 0) {
+      emit("Preparing records...", 0, 0);
+      await new Promise((r) => setTimeout(r, 0));
+      const records = validNewRows.map((r) => config.buildRecord(r.raw));
+      const totalBatches = Math.ceil(records.length / BATCH_SIZE);
+
+      for (let i = 0; i < records.length; i += BATCH_SIZE) {
+        if (cancelledRef.current) { errors.push("Cancelled by user"); break; }
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batch = records.slice(i, i + BATCH_SIZE);
+        emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
+
+        const bt0 = performance.now();
+        const br = await config.bulkSaveBatch(batch);
+        batchTimings.push(performance.now() - bt0);
+
+        if (br.error) {
+          const rowStart = i + 1;
+          const rowEnd = Math.min(i + BATCH_SIZE, records.length);
+          errors.push(`Batch ${batchNum}/${totalBatches} (rows ${rowStart.toLocaleString()}–${rowEnd.toLocaleString()}): ${br.error}`);
+          result.failed += batch.length;
+        } else {
+          result.imported += br.created;
+          result.skipped += br.skipped;
         }
-        // Update existing
-        try {
-          const record = config.buildRecord(row.raw);
-          await config.saveUpdate(row.duplicateId!, record as Partial<T>);
-          result.updated++;
-        } catch (err) {
-          result.failed++;
-          errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Update failed"}`);
-        }
-        continue;
+        processedRows += batch.length;
+        emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
       }
-
-      // Save new
-      try {
-        const record = config.buildRecord(row.raw);
-        await config.saveNew(record);
-        result.imported++;
-      } catch (err) {
-        result.failed++;
-        errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Import failed"}`);
+    } else if (validNewRows.length > 0) {
+      // ── Row-by-row fallback ──
+      const total = validNewRows.length;
+      for (let i = 0; i < total; i++) {
+        if (cancelledRef.current) { errors.push("Cancelled by user"); break; }
+        const row = validNewRows[i];
+        const bt0 = performance.now();
+        try { await config.saveNew(config.buildRecord(row.raw)); result.imported++; }
+        catch (err) { result.failed++; errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Failed"}`); }
+        batchTimings.push(performance.now() - bt0);
+        processedRows++;
+        if ((i + 1) % 10 === 0 || i === total - 1) emit("Writing to database...", i + 1, total);
       }
     }
 
-    setSummary(result);
-    setImportErrors(errors);
-    setStep("done");
+    // ── Duplicates ──
+    if (!cancelledRef.current && dupRows.length > 0 && dupAction !== "skip") {
+      for (let i = 0; i < dupRows.length; i++) {
+        if (cancelledRef.current) { errors.push("Cancelled by user"); break; }
+        const row = dupRows[i];
+        try { await config.saveUpdate(row.duplicateId!, config.buildRecord(row.raw) as Partial<T>); result.updated++; }
+        catch (err) { result.failed++; errors.push(`Row ${row.idx}: ${err instanceof Error ? err.message : "Update failed"}`); }
+        processedRows++;
+        if ((i + 1) % 10 === 0 || i === dupRows.length - 1) emit("Updating duplicates...", i + 1, dupRows.length);
+      }
+    } else if (!cancelledRef.current) {
+      result.skipped += dupRows.length;
+      processedRows += dupRows.length;
+    }
+
+    done();
+
+    function done() {
+      const totalMs = performance.now() - t0;
+      const avgBatchMs = batchTimings.length > 0 ? batchTimings.reduce((a, b) => a + b, 0) / batchTimings.length : 0;
+      setTiming({ totalMs, avgBatchMs, batchCount: batchTimings.length });
+      setSummary(result);
+      setImportErrors(errors);
+      setStep("done");
+    }
   };
 
   // ── Counts ─────────────────────────────────────────────────────────────────
@@ -235,19 +311,21 @@ export default function ImportModal<T extends { id: string }>({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60" onClick={step === "importing" ? undefined : onClose} />
       <div className="relative bg-[#111827] rounded-xl shadow-xl shadow-black/40 w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#1F2937]">
           <h3 className="text-lg font-semibold text-[#F9FAFB]">
             Import {config.moduleName}
           </h3>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-300 text-xl leading-none"
-          >
-            ×
-          </button>
+          {step !== "importing" && (
+            <button
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-300 text-xl leading-none"
+            >
+              ×
+            </button>
+          )}
         </div>
 
         {/* Body */}
@@ -408,7 +486,7 @@ export default function ImportModal<T extends { id: string }>({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1F2937]">
-                      {rows.map((row) => (
+                      {rows.slice(0, 200).map((row) => (
                         <tr
                           key={row.idx}
                           className={
@@ -460,6 +538,13 @@ export default function ImportModal<T extends { id: string }>({
                 </div>
               </div>
 
+              {/* Truncation notice */}
+              {rows.length > 200 && (
+                <p className="text-xs text-gray-500 text-center">
+                  Showing first 200 of {rows.length.toLocaleString()} rows in preview. All rows will be imported.
+                </p>
+              )}
+
               {/* Error detail */}
               {errorRows.length > 0 && (
                 <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3">
@@ -479,11 +564,69 @@ export default function ImportModal<T extends { id: string }>({
             </div>
           )}
 
-          {/* ── Step: Importing ───────────────────────────────────────────── */}
+          {/* ── Step: Importing (live progress) ────────────────────────── */}
           {step === "importing" && (
-            <div className="flex flex-col items-center justify-center py-12">
-              <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
-              <p className="text-sm text-gray-300">Importing records...</p>
+            <div className="space-y-4 py-4">
+              {/* Debug marker */}
+              <p className="text-center text-xs font-bold text-green-400 bg-green-900/20 rounded-lg py-1">PROGRESS UI ACTIVE — {Math.floor((progress.processedRows / (progress.totalRows || 1)) * 100)}% — {progress.processedRows.toLocaleString()}/{progress.totalRows.toLocaleString()} rows — batch {progress.batchNum}/{progress.totalBatches}</p>
+              {/* File info */}
+              <div className="flex items-center gap-2 px-1">
+                <span className="text-base">📄</span>
+                <span className="text-sm text-gray-300 font-medium truncate">{fileName}</span>
+                <span className="text-xs text-gray-500 flex-shrink-0">{rows.length.toLocaleString()} rows</span>
+              </div>
+
+              {/* Phase + spinner */}
+              <div className="flex items-center gap-3 bg-[#0B0F14] rounded-xl px-4 py-3 border border-[#1F2937]">
+                <div className="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin flex-shrink-0" />
+                <p className="text-sm text-gray-200">{progress.phase || "Preparing..."}</p>
+              </div>
+
+              {/* Progress bar — driven by processedRows / totalRows */}
+              {progress.totalRows > 0 && (
+                <div>
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="text-gray-400">
+                      {progress.processedRows.toLocaleString()} / {progress.totalRows.toLocaleString()} rows processed
+                      {progress.totalBatches > 0 && ` (batch ${progress.batchNum}/${progress.totalBatches})`}
+                    </span>
+                    <span className="font-semibold text-gray-200 text-sm">{Math.floor((progress.processedRows / progress.totalRows) * 100)}%</span>
+                  </div>
+                  <div className="w-full h-3 bg-[#1F2937] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${(progress.processedRows / progress.totalRows) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Live counters */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-xl font-bold text-green-400">{progress.imported.toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Imported</p>
+                </div>
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-xl font-bold text-yellow-400">{progress.skipped.toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Skipped</p>
+                </div>
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-xl font-bold text-red-400">{progress.failed.toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Failed</p>
+                </div>
+              </div>
+
+              {/* Timing metrics */}
+              <div className="flex items-center justify-between text-[10px] text-gray-600 px-1">
+                <span>Elapsed: {(progress.elapsedMs / 1000).toFixed(1)}s</span>
+                {progress.avgBatchMs > 0 && <span>Avg/batch: {(progress.avgBatchMs / 1000).toFixed(2)}s</span>}
+                {progress.avgBatchMs > 0 && progress.processedRows < progress.totalRows && (() => {
+                  const rowsLeft = progress.totalRows - progress.processedRows;
+                  const batchesLeft = Math.ceil(rowsLeft / 500);
+                  return <span>ETA: ~{((batchesLeft * progress.avgBatchMs) / 1000).toFixed(0)}s</span>;
+                })()}
+              </div>
             </div>
           )}
 
@@ -499,31 +642,144 @@ export default function ImportModal<T extends { id: string }>({
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
-                  <p className="text-2xl font-bold text-gray-100">{summary.total}</p>
+                  <p className="text-2xl font-bold text-gray-100">{summary.total.toLocaleString()}</p>
                   <p className="text-xs text-gray-500">Total Rows</p>
                 </div>
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
-                  <p className="text-2xl font-bold text-green-400">{summary.imported}</p>
+                  <p className="text-2xl font-bold text-green-400">{summary.imported.toLocaleString()}</p>
                   <p className="text-xs text-gray-500">Imported</p>
                 </div>
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
-                  <p className="text-2xl font-bold text-yellow-400">{summary.updated > 0 ? summary.updated : summary.skipped}</p>
+                  <p className="text-2xl font-bold text-yellow-400">{(summary.updated > 0 ? summary.updated : summary.skipped).toLocaleString()}</p>
                   <p className="text-xs text-gray-500">{summary.updated > 0 ? "Updated" : "Skipped"}</p>
                 </div>
                 <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
-                  <p className="text-2xl font-bold text-red-400">{summary.failed}</p>
+                  <p className="text-2xl font-bold text-red-400">{summary.failed.toLocaleString()}</p>
                   <p className="text-xs text-gray-500">Failed</p>
+                </div>
+              </div>
+
+              {/* Timing metrics */}
+              <div className="bg-[#0B0F14] rounded-xl p-3 border border-[#1F2937]">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-400">Total time</span>
+                  <span className="text-gray-200 font-medium">{(timing.totalMs / 1000).toFixed(1)}s</span>
+                </div>
+                {timing.batchCount > 1 && (
+                  <div className="flex items-center justify-between text-xs mt-1">
+                    <span className="text-gray-400">Avg per batch ({timing.batchCount} batches × 500 rows)</span>
+                    <span className="text-gray-200 font-medium">{(timing.avgBatchMs / 1000).toFixed(2)}s</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-xs mt-1">
+                  <span className="text-gray-400">Throughput</span>
+                  <span className="text-gray-200 font-medium">{timing.totalMs > 0 ? Math.round((summary.imported / (timing.totalMs / 1000))) : 0} records/sec</span>
+                </div>
+              </div>
+
+              {importErrors.length > 0 && (() => {
+                const batchErrors = importErrors.filter((e) => e.startsWith("Batch "));
+                const rowErrors = importErrors.filter((e) => e.startsWith("Row "));
+                const otherErrors = importErrors.filter((e) => !e.startsWith("Batch ") && !e.startsWith("Row "));
+                return (
+                  <div className="space-y-3">
+                    {/* Failed batches with row ranges */}
+                    {batchErrors.length > 0 && (
+                      <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3">
+                        <p className="text-xs font-semibold text-red-400 mb-2">Failed batches ({batchErrors.length})</p>
+                        <ul className="text-xs text-red-300/80 space-y-1 max-h-40 overflow-y-auto">
+                          {batchErrors.map((err, i) => (
+                            <li key={i} className="flex items-start gap-1.5">
+                              <span className="text-red-500 mt-px">✕</span>
+                              <span>{err}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-3 bg-[#0B0F14] rounded-lg p-2.5 border border-[#1F2937]">
+                          <p className="text-[10px] text-gray-400">
+                            <span className="text-gray-300 font-medium">To retry failed rows:</span> Create a new file containing only the rows shown above and re-import.
+                            Already-imported rows will be skipped automatically (duplicate SKU detection).
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Row-level errors */}
+                    {rowErrors.length > 0 && (
+                      <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3">
+                        <p className="text-xs font-semibold text-red-400 mb-1">Row errors ({rowErrors.length})</p>
+                        <ul className="text-xs text-red-300/80 space-y-0.5 max-h-24 overflow-y-auto">
+                          {rowErrors.slice(0, 30).map((err, i) => (
+                            <li key={i}>{err}</li>
+                          ))}
+                          {rowErrors.length > 30 && (
+                            <li className="text-gray-500">...and {rowErrors.length - 30} more</li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Other errors (cancel, etc) */}
+                    {otherErrors.length > 0 && (
+                      <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-xl p-3">
+                        <ul className="text-xs text-yellow-300/80 space-y-0.5">
+                          {otherErrors.map((err, i) => (
+                            <li key={i}>{err}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ── Step: Dry Run ──────────────────────────────────────────────── */}
+          {step === "dry-run" && (
+            <div className="space-y-4">
+              <div className="text-center py-4">
+                <div className="text-4xl mb-2">🔍</div>
+                <p className="text-lg font-semibold text-gray-100">Dry Run Report</p>
+                <p className="text-xs text-gray-500 mt-1">No data was written. This is a preview of what would happen.</p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-2xl font-bold text-gray-100">{summary.total.toLocaleString()}</p>
+                  <p className="text-xs text-gray-500">Total Rows</p>
+                </div>
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-2xl font-bold text-green-400">{summary.imported.toLocaleString()}</p>
+                  <p className="text-xs text-gray-500">Would Import</p>
+                </div>
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-2xl font-bold text-yellow-400">{(summary.skipped + summary.updated).toLocaleString()}</p>
+                  <p className="text-xs text-gray-500">{summary.updated > 0 ? "Would Update" : "Would Skip"}</p>
+                </div>
+                <div className="bg-[#0B0F14] rounded-xl p-3 text-center border border-[#1F2937]">
+                  <p className="text-2xl font-bold text-red-400">{summary.failed.toLocaleString()}</p>
+                  <p className="text-xs text-gray-500">Would Fail</p>
                 </div>
               </div>
 
               {importErrors.length > 0 && (
                 <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-3">
-                  <p className="text-xs font-medium text-red-400 mb-1">Errors:</p>
+                  <p className="text-xs font-medium text-red-400 mb-1">Validation errors that would cause failures:</p>
                   <ul className="text-xs text-red-300/80 space-y-0.5 max-h-32 overflow-y-auto">
                     {importErrors.map((err, i) => (
                       <li key={i}>{err}</li>
                     ))}
+                    {errorRows.length > 50 && (
+                      <li className="text-gray-500">...and {errorRows.length - 50} more</li>
+                    )}
                   </ul>
+                </div>
+              )}
+
+              {summary.failed === 0 && (
+                <div className="bg-green-500/5 border border-green-500/20 rounded-xl p-3">
+                  <p className="text-xs font-medium text-green-400">All {summary.imported.toLocaleString()} records are valid and ready to import.</p>
                 </div>
               )}
             </div>
@@ -549,6 +805,24 @@ export default function ImportModal<T extends { id: string }>({
                 Cancel
               </button>
               <button
+                onClick={() => {
+                  setSummary({
+                    total: rows.length,
+                    imported: newRows.length,
+                    updated: dupAction === "update" ? duplicateRows.length : 0,
+                    skipped: dupAction === "skip" ? duplicateRows.length : 0,
+                    failed: errorRows.length,
+                  });
+                  setImportErrors(
+                    errorRows.slice(0, 50).map((r) => `Row ${r.idx}: ${r.errors.map((e) => e.message).join(", ")}`)
+                  );
+                  setStep("dry-run" as ImportStep);
+                }}
+                className="px-4 py-2.5 text-sm font-medium text-gray-300 border border-[#374151] rounded-xl hover:bg-[#1F2937] transition-colors"
+              >
+                Dry Run
+              </button>
+              <button
                 onClick={handleImport}
                 disabled={validRows.length === 0}
                 className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-40 transition-all shadow-sm"
@@ -557,13 +831,38 @@ export default function ImportModal<T extends { id: string }>({
               </button>
             </>
           )}
+          {step === "importing" && (
+            <button
+              onClick={() => { cancelledRef.current = true; }}
+              className="px-4 py-2.5 text-sm font-medium text-red-400 border border-red-800 rounded-xl hover:bg-red-900/20 transition-colors"
+            >
+              Cancel Import
+            </button>
+          )}
           {step === "done" && (
             <button
               onClick={onClose}
               className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-sm"
             >
-              Done
+              Close
             </button>
+          )}
+          {step === "dry-run" && (
+            <>
+              <button
+                onClick={() => setStep("preview")}
+                className="px-4 py-2.5 text-sm text-gray-400 hover:text-gray-200"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={validRows.length === 0}
+                className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-40 transition-all shadow-sm"
+              >
+                Proceed with Import
+              </button>
+            </>
           )}
         </div>
       </div>

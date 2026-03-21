@@ -16,6 +16,7 @@ import {
   dbDeletePart,
   dbCheckPartDependencies,
   dbCreateCategory,
+  dbBulkCreateParts,
 } from "@/lib/actions-spare-parts";
 
 // ── Search fields ──────────────────────────────────────────────────────────
@@ -708,8 +709,11 @@ export default function PartsPage() {
               setParts((prev) => prev.map((p) => (p.id === id ? updated : p)));
               return updated;
             },
+            onBulkBatch: async (batch) => {
+              return dbBulkCreateParts(batch);
+            },
           })}
-          onClose={() => setImportOpen(false)}
+          onClose={() => { setImportOpen(false); loadData(); }}
         />
       )}
     </div>

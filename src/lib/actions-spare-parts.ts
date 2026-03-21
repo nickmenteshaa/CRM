@@ -179,6 +179,34 @@ export async function dbCreatePart(data: Omit<Part, "id">): Promise<Part> {
   return mapPart(row);
 }
 
+/**
+ * Insert a single batch of parts via createMany. Called once per batch from the client.
+ * Client controls batch size and loop so UI progress updates after every DB write.
+ * Recommended batch size: 500 rows (good balance of speed vs granular progress).
+ */
+export async function dbBulkCreateParts(
+  records: Omit<Part, "id">[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  try {
+    const result = await prisma.part.createMany({
+      data: records.map((d) => ({
+        sku: d.sku, name: d.name,
+        description: d.description, oemNumber: d.oemNumber,
+        brand: d.brand, categoryId: d.categoryId,
+        compatMake: d.compatMake, compatModel: d.compatModel,
+        compatYearFrom: d.compatYearFrom, compatYearTo: d.compatYearTo,
+        weight: d.weight, dimensions: d.dimensions,
+        imageUrl: d.imageUrl, unitPrice: d.unitPrice,
+        costPrice: d.costPrice, isActive: d.isActive ?? true,
+      })),
+      skipDuplicates: true,
+    });
+    return { created: result.count, skipped: records.length - result.count };
+  } catch (err) {
+    return { created: 0, skipped: 0, error: err instanceof Error ? err.message : "DB write failed" };
+  }
+}
+
 export async function dbUpdatePart(id: string, updates: Partial<Part>): Promise<Part> {
   const row = await prisma.part.update({
     where: { id },

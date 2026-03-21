@@ -166,6 +166,7 @@ export function partImportConfig(opts: {
   existing: Part[];
   onAdd: (p: Omit<Part, "id">) => Promise<Part>;
   onUpdate: (id: string, p: Partial<Part>) => Promise<Part>;
+  onBulkBatch?: (batch: Omit<Part, "id">[]) => Promise<{ created: number; skipped: number; error?: string }>;
 }): ImportConfig<Part> {
   return {
     moduleName: "Parts Catalog",
@@ -192,6 +193,7 @@ export function partImportConfig(opts: {
       existing.find((p) => p.sku.toLowerCase() === row.sku?.toLowerCase()),
     saveNew: async (record) => { await opts.onAdd(record); },
     saveUpdate: async (id, record) => { await opts.onUpdate(id, record as Partial<Part>); },
+    bulkSaveBatch: opts.onBulkBatch,
   };
 }
 
