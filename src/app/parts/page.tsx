@@ -133,10 +133,15 @@ export default function PartsPage() {
   // ── Load data ──────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
-    const data = await dbGetSparePartsData();
-    setParts(data.parts);
-    setCategories(data.categories);
-    setLoaded(true);
+    try {
+      const data = await dbGetSparePartsData();
+      setParts(data.parts ?? []);
+      setCategories(data.categories ?? []);
+    } catch (err) {
+      console.error("[PartsPage] load failed:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);

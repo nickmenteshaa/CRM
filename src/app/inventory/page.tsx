@@ -141,13 +141,18 @@ export default function InventoryPage() {
   // ── Load ───────────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
-    const data = await dbGetSparePartsData();
-    setInventory(data.inventory);
-    setParts(data.parts);
-    setWarehouses(data.warehouses);
-    setSupplierParts(data.supplierParts);
-    setSuppliers(data.suppliers);
-    setLoaded(true);
+    try {
+      const data = await dbGetSparePartsData();
+      setInventory(data.inventory ?? []);
+      setParts(data.parts ?? []);
+      setWarehouses(data.warehouses ?? []);
+      setSupplierParts(data.supplierParts ?? []);
+      setSuppliers(data.suppliers ?? []);
+    } catch (err) {
+      console.error("[InventoryPage] load failed:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);

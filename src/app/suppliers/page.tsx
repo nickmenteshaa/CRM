@@ -161,11 +161,16 @@ export default function SuppliersPage() {
   // ── Load data ──────────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
-    const data = await dbGetSparePartsData();
-    setSuppliers(data.suppliers);
-    setSupplierParts(data.supplierParts);
-    setAllParts(data.parts);
-    setLoaded(true);
+    try {
+      const data = await dbGetSparePartsData();
+      setSuppliers(data.suppliers ?? []);
+      setSupplierParts(data.supplierParts ?? []);
+      setAllParts(data.parts ?? []);
+    } catch (err) {
+      console.error("[SuppliersPage] load failed:", err);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);

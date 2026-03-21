@@ -337,24 +337,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── Mount: load from DB ────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
-      const data = await dbGetAll();
+      try {
+        const data = await dbGetAll();
 
-      const processedLeads = data.leads.map((lead) => {
-        let status = lead.status;
-        if (!PROTECTED_STATUSES.has(status) && lead.lastContactAt && daysSince(lead.lastContactAt) >= 7) {
-          status = "Cold";
-        }
-        const count = data.activities.filter((a) => a.leadId === lead.id).length;
-        return { ...lead, status, nextAction: generateNextAction(status, count) };
-      });
+        const processedLeads = (data.leads ?? []).map((lead) => {
+          let status = lead.status;
+          if (!PROTECTED_STATUSES.has(status) && lead.lastContactAt && daysSince(lead.lastContactAt) >= 7) {
+            status = "Cold";
+          }
+          const count = (data.activities ?? []).filter((a) => a.leadId === lead.id).length;
+          return { ...lead, status, nextAction: generateNextAction(status, count) };
+        });
 
-      setLeads(processedLeads);
-      setTasks(data.tasks);
-      setDeals(data.deals);
-      setCompanies(data.companies);
-      setActivities(data.activities);
-      setMessages(data.messages);
-      setLoaded(true);
+        setLeads(processedLeads);
+        setTasks(data.tasks ?? []);
+        setDeals(data.deals ?? []);
+        setCompanies(data.companies ?? []);
+        setActivities(data.activities ?? []);
+        setMessages(data.messages ?? []);
+      } catch (err) {
+        console.error("[AppContext] dbGetAll failed:", err);
+      } finally {
+        setLoaded(true);
+      }
     }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -605,14 +610,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Reload client state from DB ───────────────────────────────────────────
   async function reloadFromDb() {
-    const data = await dbGetAll();
-    setLeads(data.leads);
-    setTasks(data.tasks);
-    setDeals(data.deals);
-    setCompanies(data.companies);
-    setActivities(data.activities);
-    setMessages(data.messages);
-    setLoaded(true);
+    try {
+      const data = await dbGetAll();
+      setLeads(data.leads ?? []);
+      setTasks(data.tasks ?? []);
+      setDeals(data.deals ?? []);
+      setCompanies(data.companies ?? []);
+      setActivities(data.activities ?? []);
+      setMessages(data.messages ?? []);
+    } catch (err) {
+      console.error("[AppContext] reloadFromDb failed:", err);
+    } finally {
+      setLoaded(true);
+    }
   }
 
   // ── Purge all business data via server action ─────────────────────────────
