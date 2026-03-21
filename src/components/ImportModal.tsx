@@ -30,11 +30,15 @@ export type ImportConfig<T> = {
   /** Optional row-level validation (e.g. "name OR company required") */
   validateRow?: (row: Record<string, string>) => string | null;
   /**
-   * Optional: write a single DB batch (e.g. 500 rows). The ImportModal
-   * calls this in a loop, updating progress after every call. This gives
-   * granular, real-time progress based on actual completed DB writes.
+   * Optional: write a single DB batch via server action.
    */
   bulkSaveBatch?: (batch: Omit<T, "id">[]) => Promise<{ created: number; skipped: number; error?: string }>;
+  /**
+   * Optional: API route URL for bulk import writes (bypasses server actions).
+   * When set, ImportModal POSTs batches to this URL instead of calling bulkSaveBatch.
+   * The API route should use a direct (non-pooler) DB connection.
+   */
+  bulkApiRoute?: string;
 };
 
 type ParsedRow = {
@@ -224,8 +228,9 @@ export default function ImportModal<T extends { id: string }>({
     await new Promise((r) => setTimeout(r, 0));
     if (cancelledRef.current) { done(); return; }
 
-    // ── Bulk batch-by-batch (500 rows each → progress updates 20× for 10k) ──
-    if (config.bulkSaveBatch && validNewRows.length > 0) {
+    // ── Bulk import: prefer API route, fall back to server action ──
+    const useBulk = !!(config.bulkApiRoute || config.bulkSaveBatch);
+    if (useBulk && validNewRows.length > 0) {
       emit("Preparing records...", 0, 0);
       await new Promise((r) => setTimeout(r, 0));
       const records = validNewRows.map((r) => config.buildRecord(r.raw));
@@ -238,7 +243,25 @@ export default function ImportModal<T extends { id: string }>({
         emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
 
         const bt0 = performance.now();
-        const br = await config.bulkSaveBatch(batch);
+        let br: { created: number; skipped: number; error?: string };
+
+        if (config.bulkApiRoute) {
+          // API route: POST JSON directly, bypasses server action serialization
+          try {
+            const resp = await fetch(config.bulkApiRoute, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ records: batch }),
+            });
+            br = await resp.json();
+            if (!resp.ok && !br.error) br.error = `HTTP ${resp.status}`;
+          } catch (fetchErr) {
+            br = { created: 0, skipped: 0, error: fetchErr instanceof Error ? fetchErr.message : "Network error" };
+          }
+        } else {
+          br = await config.bulkSaveBatch!(batch);
+        }
+
         batchTimings.push(performance.now() - bt0);
 
         if (br.error) {

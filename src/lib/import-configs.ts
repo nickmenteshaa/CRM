@@ -167,6 +167,7 @@ export function partImportConfig(opts: {
   onAdd: (p: Omit<Part, "id">) => Promise<Part>;
   onUpdate: (id: string, p: Partial<Part>) => Promise<Part>;
   onBulkBatch?: (batch: Omit<Part, "id">[]) => Promise<{ created: number; skipped: number; error?: string }>;
+  bulkApiRoute?: string;
 }): ImportConfig<Part> {
   return {
     moduleName: "Parts Catalog",
@@ -194,6 +195,7 @@ export function partImportConfig(opts: {
     saveNew: async (record) => { await opts.onAdd(record); },
     saveUpdate: async (id, record) => { await opts.onUpdate(id, record as Partial<Part>); },
     bulkSaveBatch: opts.onBulkBatch,
+    bulkApiRoute: opts.bulkApiRoute,
   };
 }
 

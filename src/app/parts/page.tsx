@@ -712,6 +712,7 @@ export default function PartsPage() {
             onBulkBatch: async (batch) => {
               return dbBulkCreateParts(batch);
             },
+            bulkApiRoute: "/api/import/parts",
           })}
           onClose={() => { setImportOpen(false); loadData(); }}
         />
