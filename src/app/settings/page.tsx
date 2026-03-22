@@ -704,6 +704,38 @@ function UsersSection() {
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "sales_rep" as Role });
   const [error, setError] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [passwords, setPasswords] = useState<Record<string, string>>({});
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [changePwUser, setChangePwUser] = useState<string | null>(null);
+  const [newPw, setNewPw] = useState("");
+  const [pwError, setPwError] = useState("");
+
+  // Load passwords when toggled on
+  useEffect(() => {
+    if (showPasswords && Object.keys(passwords).length === 0) {
+      import("@/lib/actions-employees").then(({ dbGetEmployeesWithPasswords }) => {
+        dbGetEmployeesWithPasswords().then((emps) => {
+          const map: Record<string, string> = {};
+          for (const e of emps) map[e.id] = e.password;
+          setPasswords(map);
+        });
+      });
+    }
+  }, [showPasswords, passwords]);
+
+  async function handleChangePassword(targetId: string) {
+    if (!newPw) { setPwError("Enter new password"); return; }
+    const { dbAdminChangePassword } = await import("@/lib/actions-employees");
+    const result = await dbAdminChangePassword(targetId, newPw);
+    if (result.ok) {
+      setPasswords((prev) => ({ ...prev, [targetId]: newPw }));
+      setChangePwUser(null);
+      setNewPw("");
+      setPwError("");
+    } else {
+      setPwError(result.error ?? "Failed");
+    }
+  }
 
   if (!isAdmin) {
     return (
@@ -737,29 +769,55 @@ function UsersSection() {
 
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-[#9CA3AF]">{allUsers.length} users</p>
-        <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-blue-700 transition-all shadow-sm">+ Invite User</button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowPasswords(!showPasswords)} className="text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5 border border-[#1F2937] rounded-lg">
+            {showPasswords ? "Hide Passwords" : "Show Passwords"}
+          </button>
+          <button onClick={() => setAddOpen(true)} className="bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-blue-700 transition-all shadow-sm">+ Invite User</button>
+        </div>
       </div>
 
       <div className="space-y-2">
         {allUsers.map((u) => (
-          <div key={u.id} className="flex items-center gap-4 bg-[#0F172A] rounded-xl px-4 py-3 border border-[#1F2937]">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold shadow-sm flex-shrink-0">
-              {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-100 truncate">{u.name}</p>
-              <p className="text-xs text-gray-500 truncate">{u.email}</p>
-            </div>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${roleStyles[u.role] ?? "bg-gray-100 text-gray-600"}`}>
-              {ROLE_LABELS[u.role] ?? u.role}
-            </span>
-            {u.id !== user?.id && (
-              <button onClick={() => setDeleteConfirm(u.id)} className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-900/20 transition-colors flex-shrink-0">
-                Remove
+          <div key={u.id} className="bg-[#0F172A] rounded-xl px-4 py-3 border border-[#1F2937]">
+            <div className="flex items-center gap-4">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-xs font-bold shadow-sm flex-shrink-0">
+                {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-100 truncate">{u.name}</p>
+                <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                {showPasswords && passwords[u.id] && (
+                  <p className="text-xs text-amber-500 mt-0.5 font-mono">pw: {passwords[u.id]}</p>
+                )}
+              </div>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${roleStyles[u.role] ?? "bg-gray-100 text-gray-600"}`}>
+                {ROLE_LABELS[u.role] ?? u.role}
+              </span>
+              <button onClick={() => { setChangePwUser(u.id); setNewPw(""); setPwError(""); }} className="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded-lg hover:bg-blue-900/20 transition-colors flex-shrink-0">
+                Change PW
               </button>
-            )}
-            {u.id === user?.id && (
-              <span className="text-xs text-gray-500 flex-shrink-0">You</span>
+              {u.id !== user?.id && (
+                <button onClick={() => setDeleteConfirm(u.id)} className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded-lg hover:bg-red-900/20 transition-colors flex-shrink-0">
+                  Remove
+                </button>
+              )}
+              {u.id === user?.id && (
+                <span className="text-xs text-gray-500 flex-shrink-0">You</span>
+              )}
+            </div>
+            {changePwUser === u.id && (
+              <div className="mt-2 flex items-center gap-2 pl-13">
+                <input
+                  className="flex-1 border border-[#1F2937] rounded-lg px-3 py-1.5 text-xs text-[#F9FAFB] bg-[#0F172A]"
+                  placeholder="New password"
+                  value={newPw}
+                  onChange={(e) => setNewPw(e.target.value)}
+                />
+                <button onClick={() => handleChangePassword(u.id)} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700">Save</button>
+                <button onClick={() => setChangePwUser(null)} className="text-xs text-gray-400 px-2 py-1.5">Cancel</button>
+                {pwError && <span className="text-xs text-red-400">{pwError}</span>}
+              </div>
             )}
           </div>
         ))}

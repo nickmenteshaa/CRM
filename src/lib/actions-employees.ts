@@ -57,6 +57,29 @@ export async function dbGetAllEmployees(): Promise<EmployeeRecord[]> {
   return rows.map(mapEmployee);
 }
 
+/** Admin-only: get all employees with passwords visible */
+export async function dbGetEmployeesWithPasswords(): Promise<(EmployeeRecord & { password: string })[]> {
+  const rows = await prisma.employee.findMany({
+    include: { team: { select: { name: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map((r) => ({ ...mapEmployee(r), password: r.password }));
+}
+
+/** Admin-only: change another user's password */
+export async function dbAdminChangePassword(
+  targetId: string,
+  newPassword: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (newPassword.length < 4) return { ok: false, error: "Password too short (min 4)" };
+  try {
+    await prisma.employee.update({ where: { id: targetId }, data: { password: newPassword } });
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Failed to update password" };
+  }
+}
+
 export async function dbGetAllTeams(): Promise<TeamRecord[]> {
   const rows = await prisma.employeeTeam.findMany({ orderBy: { name: "asc" } });
   return rows.map(mapTeam);

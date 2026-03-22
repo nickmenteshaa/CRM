@@ -2,6 +2,15 @@
 
 import { prisma } from "@/lib/db";
 
+/** Get all admin user IDs — admins are auto-included in every conversation */
+async function getAdminIds(): Promise<string[]> {
+  const admins = await prisma.employee.findMany({
+    where: { role: "admin", isActive: true },
+    select: { id: true },
+  });
+  return admins.map((a) => a.id);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────────
 
 export type ChatConversation = {
@@ -277,13 +286,16 @@ export async function dbFindOrCreateDirectConversation(
     }
   }
 
-  // Create new
+  // Create new — auto-include admin(s)
+  const adminIds = await getAdminIds();
+  const allMembers = [...new Set([...JSON.parse(membersA) as string[], ...adminIds])];
+
   const row = await prisma.chatConversation.create({
     data: {
       type: "direct",
       name: null,
       createdBy: user.id,
-      members: membersA,
+      members: JSON.stringify(allMembers),
     },
   });
 
@@ -302,12 +314,14 @@ export async function dbCreateGroupConversation(
   // Only admin and manager can create groups
   if (user.role !== "admin" && user.role !== "manager") return null;
 
-  // Ensure creator is in members
-  const uniqueMembers = [...new Set([user.id, ...memberIds])];
+  // Ensure creator + admin(s) are in members
+  const adminIds = await getAdminIds();
+  const uniqueMembers = [...new Set([user.id, ...memberIds, ...adminIds])];
 
-  // Permission check: creator must be allowed to message all members
+  // Permission check: creator must be allowed to message non-admin members
   const allowed = getAllowedRecipients(user, allUsers);
   for (const mid of uniqueMembers) {
+    if (adminIds.includes(mid)) continue; // admin auto-included, skip perm check
     if (!allowed.has(mid)) return null;
   }
 

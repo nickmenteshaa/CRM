@@ -433,9 +433,10 @@ export async function POST(request: NextRequest) {
         where: { isActive: true },
         select: { id: true, name: true, role: true },
       });
+      const admins = allEmps.filter((e) => e.role === "admin");
+      const adminId = admins[0]?.id; // primary admin — auto-included in all chats
       const managers = allEmps.filter((e) => e.role === "manager" || e.role === "admin");
       const salesReps = allEmps.filter((e) => e.role === "sales_rep");
-      const seniorReps = allEmps.filter((e) => e.role === "senior_rep");
 
       // Message templates by context
       const salesMessages = [
@@ -485,10 +486,10 @@ export async function POST(request: NextRequest) {
 
         const gt = pick(groupTypes);
         const groupMembers = [
+          ...(adminId ? [adminId] : []), // admin always included
           pick(managers).id,
           ...salesReps.sort(() => Math.random() - 0.5).slice(0, randInt(2, 4)).map((r) => r.id),
         ];
-        // Deduplicate
         const uniqueMembers = [...new Set(groupMembers)];
 
         const conv = await prisma.chatConversation.create({
@@ -543,11 +544,13 @@ export async function POST(request: NextRequest) {
         }
 
         if (!convId) {
+          // Admin auto-included in all conversations
+          const dmMembers = [...new Set([sender.id, receiver.id, ...(adminId ? [adminId] : [])])];
           const conv = await prisma.chatConversation.create({
             data: {
               type: "direct",
               createdBy: sender.id,
-              members: JSON.stringify([sender.id, receiver.id]),
+              members: JSON.stringify(dmMembers),
             },
           });
           convId = conv.id;
