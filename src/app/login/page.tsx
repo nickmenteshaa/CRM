@@ -23,6 +23,7 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Already logged in → redirect immediately
   useEffect(() => {
@@ -74,15 +75,37 @@ function LoginForm() {
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
-            <input
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full border border-[#374151] rounded-lg px-3 py-2.5 text-sm text-[#F9FAFB] placeholder-gray-600 bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full border border-[#374151] rounded-lg px-3 py-2.5 pr-10 text-sm text-[#F9FAFB] placeholder-gray-600 bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                {showPassword ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                )}
+              </button>
+            </div>
+            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showPassword}
+                onChange={(e) => setShowPassword(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-500 bg-[#0F172A] text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+              />
+              <span className="text-xs text-gray-400">Show password</span>
+            </label>
           </div>
 
           {error && (
@@ -100,26 +123,6 @@ function LoginForm() {
           </button>
         </form>
 
-        {/* Demo credentials hint */}
-        <div className="mt-4 bg-[#111827] border border-[#1F2937] rounded-xl p-4 space-y-2 text-xs text-[#9CA3AF]">
-          <p className="font-semibold text-gray-300">Demo accounts</p>
-          <div className="flex justify-between">
-            <span>admin@crm.com / admin123</span>
-            <span className="bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 font-medium">Admin</span>
-          </div>
-          <div className="flex justify-between">
-            <span>sales@crm.com / sales123</span>
-            <span className="bg-blue-100 text-blue-700 rounded-full px-2 py-0.5 font-medium">Sales Rep</span>
-          </div>
-          <div className="flex justify-between">
-            <span>senior@crm.com / senior123</span>
-            <span className="bg-emerald-100 text-emerald-700 rounded-full px-2 py-0.5 font-medium">Senior Rep</span>
-          </div>
-          <div className="flex justify-between">
-            <span>manager@crm.com / manager123</span>
-            <span className="bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 font-medium">Manager</span>
-          </div>
-        </div>
       </div>
     </div>
   );
