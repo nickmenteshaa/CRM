@@ -6,7 +6,7 @@ import Modal from "@/components/Modal";
 import SearchFilter from "@/components/SearchFilter";
 import PageLoading from "@/components/PageLoading";
 import EmptyState from "@/components/EmptyState";
-import { useApp, type Company } from "@/context/AppContext";
+import { useApp, type Company, type Lead } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import ImportModal from "@/components/ImportModal";
 import { companyImportConfig } from "@/lib/import-configs";
@@ -75,7 +75,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: { label
 
 export default function CompaniesPage() {
   const { isAdmin } = useAuth();
-  const { companies, addCompany, updateCompany, deleteCompany, bulkDeleteCompanies, loaded } = useApp();
+  const { companies, addCompany, updateCompany, deleteCompany, bulkDeleteCompanies, reloadCompanies, leads, deals, loaded } = useApp();
   const [selected, setSelected]     = useState<Company | null>(null);
   const [addOpen, setAddOpen]       = useState(false);
   const [editOpen, setEditOpen]     = useState(false);
@@ -276,19 +276,75 @@ export default function CompaniesPage() {
             <Field label="Website" value={selected.website ?? "—"} />
             <Field label="Industry" value={`${industryIcons[selected.industry] ?? "🏢"} ${selected.industry}`} />
 
-            <div className="bg-[#0B0F14] rounded-2xl p-4 space-y-2">
-              <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide">Quick Stats</p>
-              <div className="flex justify-between text-sm">
-                <span className="text-[#9CA3AF]">Avg deal size</span>
-                <span className="font-medium text-gray-100">
-                  {selected.contacts > 0 ? `$${Math.round(parseInt(selected.revenue.replace(/\D/g, "")) / selected.contacts).toLocaleString()}` : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-[#9CA3AF]">Status</span>
-                <span className={`font-medium ${selected.status === "Active" ? "text-green-600" : selected.status === "At Risk" ? "text-yellow-600" : "text-[#9CA3AF]"}`}>{selected.status}</span>
-              </div>
-            </div>
+            {/* Quick Stats with deals data */}
+            {(() => {
+              const companyLeads = leads.filter((l) => l.companyId === selected.id);
+              const companyLeadIds = new Set(companyLeads.map((l) => l.id));
+              const companyDeals = deals.filter((d) => d.leadId && companyLeadIds.has(d.leadId));
+              const totalDealsValue = companyDeals.reduce((s, d) => s + (parseInt(d.value?.replace(/\D/g, "") || "0") || 0), 0);
+              const wonDeals = companyDeals.filter((d) => d.won);
+              const wonValue = wonDeals.reduce((s, d) => s + (parseInt(d.value?.replace(/\D/g, "") || "0") || 0), 0);
+              // Find most common rep
+              const repCounts = new Map<string, { name: string; count: number }>();
+              for (const l of companyLeads) {
+                if (l.ownerId) {
+                  const existing = repCounts.get(l.ownerId);
+                  if (existing) existing.count++;
+                  else repCounts.set(l.ownerId, { name: l.ownerId, count: 1 });
+                }
+              }
+              const topRep = [...repCounts.values()].sort((a, b) => b.count - a.count)[0];
+
+              return (
+                <>
+                  <div className="bg-[#0B0F14] rounded-2xl p-4 space-y-2">
+                    <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide">Quick Stats</p>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#9CA3AF]">Pipeline value</span>
+                      <span className="font-medium text-gray-100">${totalDealsValue.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#9CA3AF]">Won revenue</span>
+                      <span className="font-medium text-green-400">${wonValue.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#9CA3AF]">Active deals</span>
+                      <span className="font-medium text-gray-100">{companyDeals.length}</span>
+                    </div>
+                    {topRep && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-[#9CA3AF]">Assigned rep</span>
+                        <span className="font-medium text-blue-400">{topRep.name}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#9CA3AF]">Status</span>
+                      <span className={`font-medium ${selected.status === "Active" ? "text-green-600" : selected.status === "At Risk" ? "text-yellow-600" : "text-[#9CA3AF]"}`}>{selected.status}</span>
+                    </div>
+                  </div>
+
+                  {/* Customers inside this company */}
+                  <div className="bg-[#0B0F14] rounded-2xl p-4 space-y-2">
+                    <p className="text-xs font-semibold text-[#9CA3AF] uppercase tracking-wide">Customers ({companyLeads.length})</p>
+                    {companyLeads.length === 0 ? (
+                      <p className="text-xs text-gray-500">No customers linked yet</p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {companyLeads.slice(0, 20).map((l) => (
+                          <div key={l.id} className="flex items-center justify-between text-sm">
+                            <span className="text-gray-200 truncate">{l.name}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${l.status === "Qualified" ? "bg-blue-100 text-blue-700" : l.status === "Converted" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>{l.status}</span>
+                          </div>
+                        ))}
+                        {companyLeads.length > 20 && (
+                          <p className="text-xs text-gray-500 pt-1">+{companyLeads.length - 20} more</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           <div className="px-6 py-4 border-t border-[#1F2937] flex gap-2">
@@ -414,8 +470,8 @@ export default function CompaniesPage() {
 
       {importOpen && (
         <ImportModal
-          config={companyImportConfig({ existing: companies, onAdd: addCompany, onUpdate: updateCompany })}
-          onClose={() => setImportOpen(false)}
+          config={companyImportConfig({ existing: companies, onAdd: addCompany, onUpdate: updateCompany, bulkApiRoute: "/api/import/companies" })}
+          onClose={() => { setImportOpen(false); reloadCompanies(); }}
         />
       )}
     </div>

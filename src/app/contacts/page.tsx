@@ -12,6 +12,7 @@ import ImportModal from "@/components/ImportModal";
 import ChatPanel from "@/components/ChatPanel";
 import { customerImportConfig } from "@/lib/import-configs";
 import { dbGetLeadsPaginated, dbGetLeadsFilterOptions, dbCreateLead, dbUpdateLead as serverUpdateLead, dbBulkCreateLeads, dbRandomAssignCustomers } from "@/lib/actions";
+import { nowDateString } from "@/lib/date-utils";
 
 const FIELDS = [
   { key: "name",           label: "Name" },
@@ -64,7 +65,7 @@ const sourceStyles: Record<string, string> = {
 const activityIcons: Record<string, string> = { Call: "📞", Email: "✉", Meeting: "📅", Note: "📝" };
 const channelIcons: Record<string, string> = { Email: "✉", WhatsApp: "💬", SMS: "📱", LinkedIn: "🔗", Other: "📨" };
 
-const emptyForm = { name: "", email: "", phone: "", status: "New", source: "Website", lastContact: "Today", carModel: "", carYear: "", carPrice: "", carVin: "", carCondition: "New", customerType: "", companyName: "", country: "", preferredBrands: "", taxId: "", shippingAddress: "", billingAddress: "", paymentTerms: "", customerNotes: "", ownerId: undefined as string | undefined };
+const emptyForm = { name: "", email: "", phone: "", status: "New", source: "Website", lastContact: "Today", carModel: "", carYear: "", carPrice: "", carVin: "", carCondition: "New", customerType: "", companyName: "", companyId: undefined as string | undefined, country: "", preferredBrands: "", taxId: "", shippingAddress: "", billingAddress: "", paymentTerms: "", customerNotes: "", ownerId: undefined as string | undefined };
 
 type SortKey = "name" | "status" | "source" | "lastContact" | "companyName" | "country";
 type SortDir = "asc" | "desc";
@@ -115,7 +116,7 @@ function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: { label
 
 export default function LeadsPage() {
   // Still use AppContext for deals, activities, messages, and mutation functions
-  const { deals, activities, messages, addLead, updateLead, deleteLead, bulkDeleteLeads, addDeal, addActivity, addMessage, aiSummarizeLead, aiConversation, aiFollowUp, loaded: appLoaded } = useApp();
+  const { deals, activities, messages, companies, addLead, updateLead, deleteLead, bulkDeleteLeads, addDeal, addActivity, addMessage, aiSummarizeLead, aiConversation, aiFollowUp, loaded: appLoaded, timezone } = useApp();
   const { isAdmin, user, allUsers, canAccessOwnerId } = useAuth();
 
   // ── Server-side paginated customer data ──────────────────────────────────
@@ -208,9 +209,10 @@ export default function LeadsPage() {
   const [filterCountry, setFilterCountry] = useState("");
   const [filterSource, setFilterSource] = useState("");
   const [filterOwner, setFilterOwner] = useState("");
+  const [filterCompany, setFilterCompany] = useState("");
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner]);
+  useEffect(() => { setPage(1); }, [filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner, filterCompany]);
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -235,6 +237,7 @@ export default function LeadsPage() {
         country: filterCountry || undefined,
         source: filterSource || undefined,
         ownerId: filterOwner || undefined,
+        companyId: filterCompany || undefined,
         sortKey: sortKey ?? "createdAt",
         sortDir: sortDir,
       });
@@ -247,7 +250,7 @@ export default function LeadsPage() {
       setFetching(false);
       setLoaded(true);
     }
-  }, [page, debouncedQuery, filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner, sortKey, sortDir]);
+  }, [page, debouncedQuery, filterStatus, filterCustomerType, filterCountry, filterSource, filterOwner, filterCompany, sortKey, sortDir]);
 
   useEffect(() => { fetchPage(); }, [fetchPage]);
 
@@ -340,7 +343,7 @@ export default function LeadsPage() {
       leadId: selected.id,
       type: activityForm.type,
       note: activityForm.note,
-      date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      date: nowDateString(timezone),
     });
     setActivityForm({ type: "Call", note: "" });
     setActivityOpen(false);
@@ -385,7 +388,7 @@ export default function LeadsPage() {
       body: msgForm.body,
       sender: msgForm.direction === "outbound" ? (user?.name ?? "Me") : currentSelected.name,
       recipient: msgForm.direction === "outbound" ? currentSelected.name : (user?.name ?? "Me"),
-      date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      date: nowDateString(timezone),
     });
     setMsgForm({ channel: "Email", direction: "outbound", subject: "", body: "", recipient: "" });
     setMessageOpen(false);
@@ -482,8 +485,12 @@ export default function LeadsPage() {
             <option value="unassigned">Unassigned</option>
             {allUsers.filter((u) => u.role === "sales_rep").map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
-          {(filterCustomerType || filterCountry || filterStatus || filterSource || filterOwner) && (
-            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterStatus(""); setFilterSource(""); setFilterOwner(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
+          <select value={filterCompany} onChange={(e) => setFilterCompany(e.target.value)} className="border border-[#1F2937] rounded-xl px-3 py-2 text-sm text-[#F9FAFB] bg-[#0F172A] focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">All Companies</option>
+            {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {(filterCustomerType || filterCountry || filterStatus || filterSource || filterOwner || filterCompany) && (
+            <button onClick={() => { setFilterCustomerType(""); setFilterCountry(""); setFilterStatus(""); setFilterSource(""); setFilterOwner(""); setFilterCompany(""); }} className="text-sm text-gray-400 hover:text-gray-200 px-2">Clear filters</button>
           )}
         </div>
 
@@ -527,7 +534,11 @@ export default function LeadsPage() {
                       <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${customerTypeStyles[lead.customerType] ?? "bg-gray-100 text-gray-600"}`}>{lead.customerType.charAt(0).toUpperCase() + lead.customerType.slice(1)}</span>
                     ) : <span className="text-gray-600">—</span>}
                   </td>
-                  <td className="px-5 py-3.5 text-[#9CA3AF]">{lead.companyName || "—"}</td>
+                  <td className="px-5 py-3.5 text-[#9CA3AF]">
+                    {lead.companyId ? (
+                      <button onClick={(e) => { e.stopPropagation(); setFilterCompany(lead.companyId!); }} className="text-blue-400 hover:underline text-left">{lead.companyName || "—"}</button>
+                    ) : (lead.companyName || "—")}
+                  </td>
                   <td className="px-5 py-3.5 text-[#9CA3AF]">{lead.country || "—"}</td>
                   <td className="px-5 py-3.5">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${statusStyles[lead.status]}`}>{lead.status}</span>
@@ -713,7 +724,7 @@ export default function LeadsPage() {
                 <p className="text-xs font-semibold text-cyan-300 uppercase tracking-wide mb-1.5">Customer Business</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   {currentSelected.customerType && <div><span className="text-cyan-400">Type:</span> <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${customerTypeStyles[currentSelected.customerType] ?? "bg-gray-100 text-gray-600"}`}>{currentSelected.customerType.charAt(0).toUpperCase() + currentSelected.customerType.slice(1)}</span></div>}
-                  {currentSelected.companyName && <div><span className="text-cyan-400">Company:</span> <span className="text-cyan-200 font-medium">{currentSelected.companyName}</span></div>}
+                  {currentSelected.companyName && <div><span className="text-cyan-400">Company:</span> {currentSelected.companyId ? <button onClick={() => setFilterCompany(currentSelected.companyId!)} className="text-cyan-200 font-medium hover:underline">{currentSelected.companyName}</button> : <span className="text-cyan-200 font-medium">{currentSelected.companyName}</span>}</div>}
                   {currentSelected.country && <div><span className="text-cyan-400">Country:</span> <span className="text-cyan-200 font-medium">{currentSelected.country}</span></div>}
                   {currentSelected.paymentTerms && <div><span className="text-cyan-400">Payment:</span> <span className="text-cyan-200 font-medium">{currentSelected.paymentTerms}</span></div>}
                   {currentSelected.taxId && <div><span className="text-cyan-400">Tax ID:</span> <span className="text-cyan-200 font-medium">{currentSelected.taxId}</span></div>}
@@ -920,7 +931,13 @@ export default function LeadsPage() {
                   {CUSTOMER_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                 </select>
               </div>
-              <LabeledInput label="Company Name" value={addForm.companyName} onChange={(v) => setAddForm({ ...addForm, companyName: v })} placeholder="e.g. ACME Parts Ltd." />
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Company</label>
+                <select className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={addForm.companyId ?? ""} onChange={(e) => { const c = companies.find((x) => x.id === e.target.value); setAddForm({ ...addForm, companyId: c?.id, companyName: c?.name ?? "" }); }}>
+                  <option value="">No Company</option>
+                  {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <LabeledInput label="Country" value={addForm.country} onChange={(v) => setAddForm({ ...addForm, country: v })} placeholder="e.g. Germany" />
@@ -993,7 +1010,13 @@ export default function LeadsPage() {
                   {CUSTOMER_TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                 </select>
               </div>
-              <LabeledInput label="Company Name" value={editForm.companyName ?? ""} onChange={(v) => setEditForm({ ...editForm, companyName: v })} placeholder="e.g. ACME Parts Ltd." />
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Company</label>
+                <select className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={editForm.companyId ?? ""} onChange={(e) => { const c = companies.find((x) => x.id === e.target.value); setEditForm({ ...editForm, companyId: c?.id ?? undefined, companyName: c?.name ?? "" }); }}>
+                  <option value="">No Company</option>
+                  {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <LabeledInput label="Country" value={editForm.country ?? ""} onChange={(v) => setEditForm({ ...editForm, country: v })} placeholder="e.g. Germany" />
@@ -1167,7 +1190,7 @@ export default function LeadsPage() {
         <ImportModal
           config={customerImportConfig({
             existing: [],
-            onAdd: async (record) => { await dbCreateLead(record, { title: `Contact lead: ${record.name}`, leadName: record.name, due: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }), priority: "High", done: false, auto: true }); },
+            onAdd: async (record) => { await dbCreateLead(record, { title: `Contact lead: ${record.name}`, leadName: record.name, due: nowDateString(timezone), priority: "High", done: false, auto: true }); },
             onUpdate: async (id, updates) => { await serverUpdateLead(id, updates); },
             onBulkBatch: async (batch) => { return dbBulkCreateLeads(batch); },
             bulkApiRoute: "/api/import/customers",

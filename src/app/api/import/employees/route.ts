@@ -50,30 +50,26 @@ export async function POST(request: NextRequest) {
   console.log(`[IMPORT-API] Employees: received ${records.length} records`);
 
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
   let totalCreated = 0;
   let totalSkipped = 0;
 
   try {
-    for (let i = 0; i < records.length; i += SUB_BATCH) {
-      const chunk = records.slice(i, i + SUB_BATCH);
+    const result = await prisma.employee.createMany({
+      data: records.map((d) => ({
+        name: d.name,
+        email: d.email.toLowerCase(),
+        password: d.password || "changeme123",
+        role: d.role || "sales_rep",
+        teamId: d.teamId || null,
+        region: d.region || null,
+        managerId: d.managerId || null,
+      })),
+      skipDuplicates: true,
+    });
 
-      const result = await prisma.employee.createMany({
-        data: chunk.map((d) => ({
-          name: d.name,
-          email: d.email.toLowerCase(),
-          password: d.password || "changeme123",
-          role: d.role || "sales_rep",
-          teamId: d.teamId || null,
-          region: d.region || null,
-          managerId: d.managerId || null,
-        })),
-        skipDuplicates: true,
-      });
-
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
-    }
+    totalCreated = result.count;
+    totalSkipped = records.length - result.count;
+    console.log(`[IMPORT-API] Employees: created=${totalCreated}, skipped=${totalSkipped}`);
 
     const elapsed = Math.round(performance.now() - t0);
     return NextResponse.json({ created: totalCreated, skipped: totalSkipped, timeMs: elapsed });

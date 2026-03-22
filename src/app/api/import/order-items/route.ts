@@ -125,17 +125,13 @@ export async function POST(request: NextRequest) {
     console.log(`[IMPORT-API] Valid rows: ${validRows.length}, skipped (no order): ${skippedNoOrder}, skipped (no part): ${skippedNoPart}`);
 
     // ── Batch insert ──────────────────────────────────────────────────
-    const SUB_BATCH = 50;
-    let totalCreated = 0;
+    const insertResult = await prisma.orderLine.createMany({
+      data: validRows,
+      skipDuplicates: true,
+    });
 
-    for (let i = 0; i < validRows.length; i += SUB_BATCH) {
-      const chunk = validRows.slice(i, i + SUB_BATCH);
-      const result = await prisma.orderLine.createMany({
-        data: chunk,
-        skipDuplicates: true,
-      });
-      totalCreated += result.count;
-    }
+    const totalCreated = insertResult.count;
+    console.log(`[IMPORT-API] Order Items: created=${totalCreated}`);
 
     const totalSkipped = records.length - totalCreated;
     const elapsed = Math.round(performance.now() - t0);

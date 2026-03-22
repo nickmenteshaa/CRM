@@ -64,43 +64,65 @@ export async function POST(request: NextRequest) {
 
   // ── Write using direct (non-pooler) connection ──
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
   let totalCreated = 0;
   let totalSkipped = 0;
 
   try {
-    for (let i = 0; i < records.length; i += SUB_BATCH) {
-      const chunk = records.slice(i, i + SUB_BATCH);
-      const batchNum = Math.floor(i / SUB_BATCH) + 1;
+    // ── Resolve companyName → companyId (batch, no N+1) ──
+    const companyNames = [...new Set(records.map((r) => r.companyName).filter(Boolean))] as string[];
+    const companyMap = new Map<string, string>(); // lowercase name → id
 
-      console.log(`[CUSTOMER-IMPORT-API] Writing sub-batch ${batchNum} (${chunk.length} rows)`);
-
-      const result = await prisma.lead.createMany({
-        data: chunk.map((d) => ({
-          name: d.name || "",
-          email: d.email || "",
-          phone: d.phone || "",
-          status: d.status || "New",
-          source: d.source || "Website",
-          lastContact: d.lastContact || "Today",
-          customerType: d.customerType || undefined,
-          companyName: d.companyName || undefined,
-          country: d.country || undefined,
-          preferredBrands: d.preferredBrands || undefined,
-          taxId: d.taxId || undefined,
-          shippingAddress: d.shippingAddress || undefined,
-          billingAddress: d.billingAddress || undefined,
-          paymentTerms: d.paymentTerms || undefined,
-          customerNotes: d.customerNotes || undefined,
-        })),
-        skipDuplicates: true,
+    if (companyNames.length > 0) {
+      const existing = await prisma.company.findMany({
+        where: { name: { in: companyNames } },
+        select: { id: true, name: true },
       });
+      for (const c of existing) companyMap.set(c.name.toLowerCase(), c.id);
 
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
-
-      console.log(`[CUSTOMER-IMPORT-API] Sub-batch ${batchNum} done: created=${result.count}, skipped=${chunk.length - result.count}`);
+      const missing = companyNames.filter((n) => !companyMap.has(n.toLowerCase()));
+      if (missing.length > 0) {
+        await prisma.company.createMany({
+          data: missing.map((name) => ({
+            name, industry: "", revenue: "$0", status: "Active", isCustomer: true, contacts: 0,
+          })),
+          skipDuplicates: true,
+        });
+        const created = await prisma.company.findMany({
+          where: { name: { in: missing } },
+          select: { id: true, name: true },
+        });
+        for (const c of created) companyMap.set(c.name.toLowerCase(), c.id);
+        console.log(`[CUSTOMER-IMPORT-API] Created ${created.length} new companies`);
+      }
+      console.log(`[CUSTOMER-IMPORT-API] Resolved ${companyMap.size} companies`);
     }
+
+    // ── Single createMany for entire batch (direct connection, no pooler) ──
+    const result = await prisma.lead.createMany({
+      data: records.map((d) => ({
+        name: d.name || "",
+        email: d.email || "",
+        phone: d.phone || "",
+        status: d.status || "New",
+        source: d.source || "Website",
+        lastContact: d.lastContact || "Today",
+        customerType: d.customerType || undefined,
+        companyName: d.companyName || undefined,
+        companyId: d.companyName ? companyMap.get(d.companyName.toLowerCase()) : undefined,
+        country: d.country || undefined,
+        preferredBrands: d.preferredBrands || undefined,
+        taxId: d.taxId || undefined,
+        shippingAddress: d.shippingAddress || undefined,
+        billingAddress: d.billingAddress || undefined,
+        paymentTerms: d.paymentTerms || undefined,
+        customerNotes: d.customerNotes || undefined,
+      })),
+      skipDuplicates: true,
+    });
+
+    totalCreated = result.count;
+    totalSkipped = records.length - result.count;
+    console.log(`[CUSTOMER-IMPORT-API] Inserted ${result.count} rows in single batch`);
 
     const elapsed = Math.round(performance.now() - t0);
     console.log(`[CUSTOMER-IMPORT-API] Complete: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);

@@ -27,6 +27,7 @@ export function companyImportConfig(opts: {
   existing: Company[];
   onAdd: (c: Omit<Company, "id">) => void;
   onUpdate: (id: string, c: Partial<Company>) => void;
+  bulkApiRoute?: string;
 }): ImportConfig<Company> {
   return {
     moduleName: "Companies",
@@ -49,6 +50,7 @@ export function companyImportConfig(opts: {
       existing.find((c) => c.name.toLowerCase() === row.name?.toLowerCase()),
     saveNew: (record) => opts.onAdd(record),
     saveUpdate: (id, record) => opts.onUpdate(id, record as Partial<Company>),
+    bulkApiRoute: opts.bulkApiRoute,
   };
 }
 

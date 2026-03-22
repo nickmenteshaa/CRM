@@ -42,7 +42,6 @@ export async function POST(request: NextRequest) {
   console.log("[IMPORT-API] ROW SAMPLE (first 5):", JSON.stringify(records.slice(0, 5), null, 2));
 
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
   let totalCreated = 0;
   let totalSkipped = 0;
   let totalUnresolved = 0;
@@ -146,17 +145,14 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Batch insert ONLY valid rows (all have real partId) ─────────────
-    for (let i = 0; i < validRows.length; i += SUB_BATCH) {
-      const chunk = validRows.slice(i, i + SUB_BATCH);
+    const result = await prisma.inventory.createMany({
+      data: validRows,
+      skipDuplicates: true,
+    });
 
-      const result = await prisma.inventory.createMany({
-        data: chunk,
-        skipDuplicates: true,
-      });
-
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
-    }
+    totalCreated = result.count;
+    totalSkipped = validRows.length - result.count;
+    console.log(`[IMPORT-API] Inventory: created=${totalCreated}, skipped=${totalSkipped}`);
 
     const elapsed = Math.round(performance.now() - t0);
     return NextResponse.json({

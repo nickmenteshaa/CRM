@@ -7,6 +7,7 @@ import SearchFilter from "@/components/SearchFilter";
 import PageLoading from "@/components/PageLoading";
 import EmptyState from "@/components/EmptyState";
 import { useApp, type Deal, type Part, type OrderLine } from "@/context/AppContext";
+import { formatDate as fmtDate } from "@/lib/date-utils";
 import { useAuth } from "@/context/AuthContext";
 import {
   dbGetSparePartsData,
@@ -59,7 +60,7 @@ function displayMoney(s?: string): string {
   return fmtMoney(parseMoney(s));
 }
 
-function formatDate(iso?: string) {
+function _formatDateUnused(iso?: string) {
   if (!iso) return "—";
   try {
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -103,7 +104,7 @@ function LabeledInput({ label, value, onChange, placeholder, readOnly, type }: {
 // ── Page ────────────────────────────────────────────────────────────────────────
 
 export default function QuotesPage() {
-  const { deals, addDeal, updateDeal, deleteDeal, loaded } = useApp();
+  const { deals, addDeal, updateDeal, deleteDeal, loaded, timezone } = useApp();
   const { isAdmin, user, allUsers, canAccessOwnerId } = useAuth();
 
   function canEditQuote(q: Deal) {
@@ -466,7 +467,7 @@ export default function QuotesPage() {
                   <td className="px-5 py-3.5 text-gray-500">
                     {q.validUntil ? (
                       <span className={isExpired(q.validUntil) ? "text-red-400" : ""}>
-                        {formatDate(q.validUntil)}
+                        {fmtDate(q.validUntil, timezone, { includeYear: true })}
                         {isExpired(q.validUntil) && " (expired)"}
                       </span>
                     ) : "—"}
@@ -505,7 +506,7 @@ export default function QuotesPage() {
               <span className="text-sm font-bold text-gray-300">{displayMoney(currentSelected.value)}</span>
               {currentSelected.validUntil && (
                 <span className={`text-xs ${isExpired(currentSelected.validUntil) ? "text-red-400" : "text-gray-500"}`}>
-                  Valid until {formatDate(currentSelected.validUntil)}
+                  Valid until {fmtDate(currentSelected.validUntil, timezone, { includeYear: true })}
                   {isExpired(currentSelected.validUntil) && " (EXPIRED)"}
                 </span>
               )}
@@ -517,7 +518,7 @@ export default function QuotesPage() {
             {[
               { label: "Contact",   value: currentSelected.contact,                 icon: "👤" },
               { label: "Owner",     value: currentSelected.owner || "—",            icon: "🧑‍💼" },
-              { label: "Created",   value: formatDate(currentSelected.createdDate), icon: "🗓" },
+              { label: "Created",   value: fmtDate(currentSelected.createdDate, timezone, { includeYear: true }), icon: "🗓" },
             ].map(({ label, value, icon }) => (
               <div key={label}>
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{label}</p>

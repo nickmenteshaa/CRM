@@ -19,7 +19,6 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AutoCRM — Car Sales Platform",
   description: "Customer Relationship Management for Car Dealerships",
 };
 

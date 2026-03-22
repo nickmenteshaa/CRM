@@ -54,34 +54,30 @@ export async function POST(request: NextRequest) {
   console.log(`[IMPORT-API] Suppliers: received ${records.length} records`);
 
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
   let totalCreated = 0;
   let totalSkipped = 0;
 
   try {
-    for (let i = 0; i < records.length; i += SUB_BATCH) {
-      const chunk = records.slice(i, i + SUB_BATCH);
+    const result = await prisma.supplier.createMany({
+      data: records.map((d) => ({
+        name: d.name,
+        contactName: d.contactName || undefined,
+        email: d.email || undefined,
+        phone: d.phone || undefined,
+        country: d.country || undefined,
+        website: d.website || undefined,
+        leadTimeDays: d.leadTimeDays ?? undefined,
+        moq: d.moq ?? undefined,
+        rating: d.rating ?? undefined,
+        notes: d.notes || undefined,
+        isActive: d.isActive ?? true,
+      })),
+      skipDuplicates: true,
+    });
 
-      const result = await prisma.supplier.createMany({
-        data: chunk.map((d) => ({
-          name: d.name,
-          contactName: d.contactName || undefined,
-          email: d.email || undefined,
-          phone: d.phone || undefined,
-          country: d.country || undefined,
-          website: d.website || undefined,
-          leadTimeDays: d.leadTimeDays ?? undefined,
-          moq: d.moq ?? undefined,
-          rating: d.rating ?? undefined,
-          notes: d.notes || undefined,
-          isActive: d.isActive ?? true,
-        })),
-        skipDuplicates: true,
-      });
-
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
-    }
+    totalCreated = result.count;
+    totalSkipped = records.length - result.count;
+    console.log(`[IMPORT-API] Suppliers: created=${totalCreated}, skipped=${totalSkipped}`);
 
     const elapsed = Math.round(performance.now() - t0);
     return NextResponse.json({ created: totalCreated, skipped: totalSkipped, timeMs: elapsed });

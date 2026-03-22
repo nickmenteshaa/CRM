@@ -7,6 +7,7 @@ import EmptyState from "@/components/EmptyState";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
+import { nowDateString } from "@/lib/date-utils";
 
 function parseDollar(v: string): number {
   return parseFloat(v.replace(/[^0-9.\-]/g, "")) || 0;
@@ -30,7 +31,7 @@ const PIPELINE_STAGES = [
 ];
 
 export default function Home() {
-  const { leads, deals, tasks, loaded } = useApp();
+  const { leads, deals, tasks, loaded, timezone } = useApp();
   const { user } = useAuth();
 
   const stats = useMemo(() => {
@@ -38,7 +39,7 @@ export default function Home() {
     const wonDeals  = deals.filter((d) => d.won);
     const pipelineValue = openDeals.reduce((s, d) => s + parseDollar(d.value), 0);
     const wonValue      = wonDeals.reduce((s, d) => s + parseDollar(d.value), 0);
-    const tasksDueToday = tasks.filter((t) => !t.done && (t.due === "Today" || t.due === new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }))).length;
+    const tasksDueToday = tasks.filter((t) => !t.done && (t.due === "Today" || t.due === nowDateString(timezone))).length;
 
     const stageData = PIPELINE_STAGES.map((ps) => {
       const stageDeals = deals.filter((d) => d.stage === ps.name);

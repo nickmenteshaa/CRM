@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import { useApp } from "@/context/AppContext";
 import { useAuth, ROLE_LABELS, type Role } from "@/context/AuthContext";
 import { useFontSize, type FontSize } from "@/context/FontSizeContext";
+import { TIMEZONE_OPTIONS } from "@/lib/date-utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -136,17 +137,22 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean
   );
 }
 
-function SaveBar({ onSave }: { onSave: () => void }) {
-  const [saved, setSaved] = useState(false);
-  function handle() {
-    onSave();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+function SaveBar({ onSave }: { onSave: () => void | Promise<void> }) {
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  async function handle() {
+    setState("saving");
+    try {
+      await onSave();
+      setState("saved");
+      setTimeout(() => setState("idle"), 2000);
+    } catch {
+      setState("idle");
+    }
   }
   return (
     <div className="flex justify-end pt-6 border-t border-[#1F2937] mt-6">
-      <button onClick={handle} className={`px-5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-sm ${saved ? "bg-green-600 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}>
-        {saved ? "✓ Saved" : "Save Changes"}
+      <button onClick={handle} disabled={state === "saving"} className={`px-5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-sm ${state === "saved" ? "bg-green-600 text-white" : state === "saving" ? "bg-blue-600/60 text-white cursor-wait" : "bg-blue-600 text-white hover:bg-blue-700"}`}>
+        {state === "saved" ? "Saved" : state === "saving" ? "Saving..." : "Save Changes"}
       </button>
     </div>
   );
@@ -270,8 +276,11 @@ function useLayoutDensity(): [LayoutDensity, (d: LayoutDensity) => void] {
 // ── General (restored from original) ───────────────────────────────────────────
 
 function GeneralSection() {
-  const [company, setCompany] = useState("AutoCRM");
-  const [timezone, setTimezone] = useState("UTC−5 (Eastern Time)");
+  const { companyName: savedCompanyName, setCompanyName: saveCompanyName, timezone: savedTimezone, setTimezone: saveTimezone } = useApp();
+  const [company, setCompany] = useState(savedCompanyName);
+  const [tz, setTz] = useState(savedTimezone);
+  useEffect(() => { setCompany(savedCompanyName); }, [savedCompanyName]);
+  useEffect(() => { setTz(savedTimezone); }, [savedTimezone]);
   const [currency, setCurrency] = useState("USD ($)");
   const [dateFormat, setDateFormat] = useState("MMM DD, YYYY");
   const [language, setLanguage] = useState("English");
@@ -280,7 +289,11 @@ function GeneralSection() {
   const fields = [
     { label: "Company / Workspace Name", node: <Input value={company} onChange={setCompany} /> },
     { label: "Language", node: <Select value={language} onChange={setLanguage} options={["English", "Spanish", "French", "German", "Portuguese"]} /> },
-    { label: "Timezone", node: <Select value={timezone} onChange={setTimezone} options={["UTC−8 (Pacific Time)", "UTC−7 (Mountain Time)", "UTC−6 (Central Time)", "UTC−5 (Eastern Time)", "UTC+0 (GMT)", "UTC+1 (CET)", "UTC+3 (Moscow)", "UTC+5:30 (IST)", "UTC+8 (CST)", "UTC+9 (JST)"]} /> },
+    { label: "Timezone", node: (
+      <select className="w-full border border-[#1F2937] rounded-xl px-3 py-2.5 text-sm text-[#F9FAFB] focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[#0F172A] focus:bg-[#1E293B]" value={tz} onChange={(e) => setTz(e.target.value)}>
+        {TIMEZONE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    ) },
     { label: "Currency", node: <Select value={currency} onChange={setCurrency} options={["USD ($)", "EUR (€)", "GBP (£)", "JPY (¥)", "CAD (C$)", "AUD (A$)", "GEL (₾)"]} /> },
     { label: "Date Format", node: <Select value={dateFormat} onChange={setDateFormat} options={["MMM DD, YYYY", "DD/MM/YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]} /> },
   ];
@@ -298,7 +311,9 @@ function GeneralSection() {
           <p className="text-sm text-gray-500">No settings match your search.</p>
         )}
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={async () => {
+        await Promise.all([saveCompanyName(company), saveTimezone(tz)]);
+      }} />
     </div>
   );
 }
@@ -311,9 +326,13 @@ function ProfileSection() {
   const [email, setEmail] = useState(user?.email ?? "");
   const [bio, setBio] = useState("");
   const [avatarColor, setAvatarColor] = useState("bg-blue-600");
+  const [saving, setSaving] = useState(false);
 
-  function handleSave() {
-    updateProfile({ name, email });
+  async function handleSave() {
+    setSaving(true);
+    await updateProfile({ name, email });
+    console.log("[Settings] Profile saved — name:", name, "email:", email);
+    setSaving(false);
   }
 
   const avatarColors = ["bg-blue-600", "bg-violet-600", "bg-rose-500", "bg-amber-500", "bg-teal-600", "bg-slate-700"];
@@ -411,8 +430,14 @@ function PasswordSection() {
 // ── Appearance (restored from V1 + merged V2 font size & layout density) ──────
 
 function AppearanceSection() {
-  const [accent, setAccent] = useState("Blue");
-  const [sidebarStyle, setSidebarStyle] = useState("Light");
+  const [accent, setAccent] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("crm_accent_color") || "Blue";
+    return "Blue";
+  });
+  const [sidebarStyle, setSidebarStyle] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("crm_sidebar_style") || "Light";
+    return "Light";
+  });
   const [search, setSearch] = useState("");
   const { fontSize, setFontSize } = useFontSize();
   const [density, setDensity] = useLayoutDensity();
@@ -529,7 +554,10 @@ function AppearanceSection() {
 
         {visible.length === 0 && <p className="text-sm text-gray-500">No options match your search.</p>}
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={() => {
+        localStorage.setItem("crm_accent_color", accent);
+        localStorage.setItem("crm_sidebar_style", sidebarStyle);
+      }} />
     </div>
   );
 }
@@ -537,7 +565,13 @@ function AppearanceSection() {
 // ── Lead Statuses (restored from original) ─────────────────────────────────────
 
 function StatusesSection() {
-  const [statuses, setStatuses] = useState<Tag[]>(DEFAULT_STATUSES);
+  const [statuses, setStatuses] = useState<Tag[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("crm_lead_statuses");
+      if (saved) try { return JSON.parse(saved); } catch { /* use default */ }
+    }
+    return DEFAULT_STATUSES;
+  });
   const [search, setSearch] = useState("");
   const filtered = search.trim() ? statuses.filter((t) => t.label.toLowerCase().includes(search.toLowerCase())) : statuses;
   return (
@@ -551,7 +585,7 @@ function StatusesSection() {
           setStatuses(merged);
         }} />
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={() => { localStorage.setItem("crm_lead_statuses", JSON.stringify(statuses)); }} />
     </div>
   );
 }
@@ -559,7 +593,13 @@ function StatusesSection() {
 // ── Lead Sources (restored from original) ──────────────────────────────────────
 
 function SourcesSection() {
-  const [sources, setSources] = useState<Tag[]>(DEFAULT_SOURCES);
+  const [sources, setSources] = useState<Tag[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("crm_lead_sources");
+      if (saved) try { return JSON.parse(saved); } catch { /* use default */ }
+    }
+    return DEFAULT_SOURCES;
+  });
   const [search, setSearch] = useState("");
   const filtered = search.trim() ? sources.filter((t) => t.label.toLowerCase().includes(search.toLowerCase())) : sources;
   return (
@@ -573,7 +613,7 @@ function SourcesSection() {
           setSources(merged);
         }} />
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={() => { localStorage.setItem("crm_lead_sources", JSON.stringify(sources)); }} />
     </div>
   );
 }
@@ -581,7 +621,13 @@ function SourcesSection() {
 // ── Pipeline Stages (restored from original) ──────────────────────────────────
 
 function StagesSection() {
-  const [stages, setStages] = useState<Tag[]>(DEFAULT_STAGES);
+  const [stages, setStages] = useState<Tag[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("crm_pipeline_stages");
+      if (saved) try { return JSON.parse(saved); } catch { /* use default */ }
+    }
+    return DEFAULT_STAGES;
+  });
   const [search, setSearch] = useState("");
   const filtered = search.trim() ? stages.filter((t) => t.label.toLowerCase().includes(search.toLowerCase())) : stages;
   return (
@@ -595,7 +641,7 @@ function StagesSection() {
           setStages(merged);
         }} />
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={() => { localStorage.setItem("crm_pipeline_stages", JSON.stringify(stages)); }} />
     </div>
   );
 }
@@ -603,13 +649,12 @@ function StagesSection() {
 // ── Notifications (restored from original) ────────────────────────────────────
 
 function NotificationsSection() {
-  const [notifs, setNotifs] = useState<Record<NotifKey, boolean>>({
-    newLead: true,
-    dealClosed: true,
-    taskDue: true,
-    weeklyReport: false,
-    teamActivity: false,
-    emailOpen: true,
+  const [notifs, setNotifs] = useState<Record<NotifKey, boolean>>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("crm_notifications");
+      if (saved) try { return JSON.parse(saved); } catch { /* use default */ }
+    }
+    return { newLead: true, dealClosed: true, taskDue: true, weeklyReport: false, teamActivity: false, emailOpen: true };
   });
   const [search, setSearch] = useState("");
 
@@ -642,7 +687,7 @@ function NotificationsSection() {
           </div>
         ))}
       </div>
-      <SaveBar onSave={() => {}} />
+      <SaveBar onSave={() => { localStorage.setItem("crm_notifications", JSON.stringify(notifs)); }} />
     </div>
   );
 }

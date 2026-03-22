@@ -65,47 +65,37 @@ export async function POST(request: NextRequest) {
 
   // ── Write using direct (non-pooler) connection ──
   const prisma = getDirectPrisma();
-  const SUB_BATCH = 50;
   let totalCreated = 0;
   let totalSkipped = 0;
 
   try {
-    for (let i = 0; i < records.length; i += SUB_BATCH) {
-      const chunk = records.slice(i, i + SUB_BATCH);
-      const batchNum = Math.floor(i / SUB_BATCH) + 1;
+    const result = await prisma.part.createMany({
+      data: records.map((d) => ({
+        sku: d.sku,
+        name: d.name,
+        description: d.description || undefined,
+        oemNumber: d.oemNumber || undefined,
+        brand: d.brand || undefined,
+        categoryId: d.categoryId || undefined,
+        compatMake: d.compatMake || undefined,
+        compatModel: d.compatModel || undefined,
+        compatYearFrom: d.compatYearFrom || undefined,
+        compatYearTo: d.compatYearTo || undefined,
+        weight: d.weight || undefined,
+        dimensions: d.dimensions || undefined,
+        imageUrl: d.imageUrl || undefined,
+        unitPrice: d.unitPrice || undefined,
+        costPrice: d.costPrice || undefined,
+        isActive: d.isActive ?? true,
+      })),
+      skipDuplicates: true,
+    });
 
-      console.log(`[IMPORT-API] Writing sub-batch ${batchNum} (${chunk.length} rows)`);
-
-      const result = await prisma.part.createMany({
-        data: chunk.map((d) => ({
-          sku: d.sku,
-          name: d.name,
-          description: d.description || undefined,
-          oemNumber: d.oemNumber || undefined,
-          brand: d.brand || undefined,
-          categoryId: d.categoryId || undefined,
-          compatMake: d.compatMake || undefined,
-          compatModel: d.compatModel || undefined,
-          compatYearFrom: d.compatYearFrom || undefined,
-          compatYearTo: d.compatYearTo || undefined,
-          weight: d.weight || undefined,
-          dimensions: d.dimensions || undefined,
-          imageUrl: d.imageUrl || undefined,
-          unitPrice: d.unitPrice || undefined,
-          costPrice: d.costPrice || undefined,
-          isActive: d.isActive ?? true,
-        })),
-        skipDuplicates: true,
-      });
-
-      totalCreated += result.count;
-      totalSkipped += chunk.length - result.count;
-
-      console.log(`[IMPORT-API] Sub-batch ${batchNum} done: created=${result.count}, skipped=${chunk.length - result.count}`);
-    }
+    totalCreated = result.count;
+    totalSkipped = records.length - result.count;
 
     const elapsed = Math.round(performance.now() - t0);
-    console.log(`[IMPORT-API] Complete: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);
+    console.log(`[IMPORT-API] Parts: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);
 
     return NextResponse.json({
       created: totalCreated,

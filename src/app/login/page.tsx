@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useApp } from "@/context/AppContext";
 
 export default function LoginPage() {
   return (
@@ -14,6 +15,7 @@ export default function LoginPage() {
 
 function LoginForm() {
   const { login, user } = useAuth();
+  const { companyName } = useApp();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -52,7 +54,7 @@ function LoginForm() {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 mb-4 shadow-md">
             <span className="text-white text-xl font-bold">CR</span>
           </div>
-          <h1 className="text-2xl font-bold text-[#F9FAFB]">AutoCRM</h1>
+          <h1 className="text-2xl font-bold text-[#F9FAFB]">{companyName}</h1>
           <p className="text-sm text-[#9CA3AF] mt-1">Car Sales Platform — Sign in</p>
         </div>
 

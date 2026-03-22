@@ -7,9 +7,10 @@ import {
   dbCreateTask, dbToggleTask,
   dbCreateDeal, dbUpdateDeal, dbDeleteDeal,
   dbCreateActivity,
-  dbCreateCompany, dbUpdateCompany, dbDeleteCompany, dbBulkDeleteCompanies,
+  dbCreateCompany, dbUpdateCompany, dbDeleteCompany, dbBulkDeleteCompanies, dbGetCompanies,
   dbCreateMessage, dbDeleteMessage,
   dbAISummarize, dbAIConversation, dbAIFollowUp,
+  dbGetAllAppSettings, dbSetAppSetting,
 } from "@/lib/actions";
 import { dbResetAllBusinessData } from "@/lib/actions-reset";
 
@@ -43,6 +44,7 @@ export type Lead = {
   billingAddress?: string;
   paymentTerms?: string;
   companyName?: string;
+  companyId?: string;
   country?: string;
   preferredBrands?: string;
   customerNotes?: string;
@@ -317,7 +319,12 @@ type AppContextType = {
   aiConversation: (leadId: string, text: string) => Promise<void>;
   aiFollowUp: (leadId: string) => Promise<void>;
   reloadFromDb: () => Promise<void>;
+  reloadCompanies: () => Promise<void>;
   purgeAllData: () => Promise<{ ok: boolean; counts: Record<string, number> }>;
+  companyName: string;
+  setCompanyName: (name: string) => Promise<void>;
+  timezone: string;
+  setTimezone: (tz: string) => Promise<void>;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -333,9 +340,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [messages,   setMessages]   = useState<Message[]>([]);
   const [loaded,     setLoaded]     = useState(false);
+  const [companyName, setCompanyNameState] = useState("AutoCRM");
+  const [timezone, setTimezoneState] = useState("Asia/Dubai");
 
   // ── Mount: load from DB ────────────────────────────────────────────────────
   useEffect(() => {
+    // Load app settings independently — must not fail if dbGetAll times out
+    dbGetAllAppSettings()
+      .then((settings) => {
+        if (settings.company_name) setCompanyNameState(settings.company_name);
+        if (settings.timezone) setTimezoneState(settings.timezone);
+      })
+      .catch((err) => console.error("[AppContext] Failed to load app settings:", err));
+
     async function load() {
       try {
         const data = await dbGetAll();
@@ -625,6 +642,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function reloadCompanies() {
+    try {
+      const data = await dbGetCompanies();
+      setCompanies(data);
+    } catch (err) {
+      console.error("[AppContext] reloadCompanies failed:", err);
+    }
+  }
+
+  async function setCompanyName(name: string) {
+    await dbSetAppSetting("company_name", name);
+    setCompanyNameState(name);
+  }
+
+  async function setTimezone(tz: string) {
+    await dbSetAppSetting("timezone", tz);
+    setTimezoneState(tz);
+  }
+
   // ── Purge all business data via server action ─────────────────────────────
   async function purgeAllData(): Promise<{ ok: boolean; counts: Record<string, number> }> {
     const result = await dbResetAllBusinessData();
@@ -651,7 +687,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addActivity,
       addMessage, deleteMessage,
       aiSummarizeLead, aiConversation, aiFollowUp,
-      reloadFromDb, purgeAllData,
+      reloadFromDb, reloadCompanies, purgeAllData,
+      companyName, setCompanyName,
+      timezone, setTimezone,
     }}>
       {children}
     </AppContext.Provider>

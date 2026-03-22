@@ -5,29 +5,22 @@ import { cookies } from "next/headers";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-type OrderRecord = {
+type CompanyRecord = {
   name: string;
-  contact: string;
-  value: string;
-  stage: string;
-  close?: string;
-  leadId?: string;
-  leadName?: string;
-  owner?: string;
-  ownerId?: string;
-  orderNumber?: string;
-  orderStatus?: string;
-  shippingMethod?: string;
-  shippingCost?: string;
-  taxAmount?: string;
-  subtotal?: string;
-  grandTotal?: string;
-  notes?: string;
+  industry?: string;
+  revenue?: string;
+  status?: string;
+  phone?: string;
+  website?: string;
+  country?: string;
+  taxId?: string;
+  paymentTerms?: string;
 };
 
 export async function POST(request: NextRequest) {
   const t0 = performance.now();
 
+  // Auth check
   const cookieStore = await cookies();
   const session = cookieStore.get("crm_session");
   if (!session?.value) {
@@ -36,8 +29,7 @@ export async function POST(request: NextRequest) {
 
   let sessionData: { role?: string };
   try {
-    const decoded = decodeURIComponent(session.value);
-    sessionData = JSON.parse(decoded);
+    sessionData = JSON.parse(decodeURIComponent(session.value));
   } catch {
     return NextResponse.json({ error: "Invalid session" }, { status: 401 });
   }
@@ -46,7 +38,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin only" }, { status: 403 });
   }
 
-  let records: OrderRecord[];
+  let records: CompanyRecord[];
   try {
     const body = await request.json();
     records = body.records;
@@ -57,48 +49,52 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  console.log(`[IMPORT-API] Orders: received ${records.length} records`);
+  console.log(`[COMPANY-IMPORT-API] Received ${records.length} records`);
 
   const prisma = getDirectPrisma();
   let totalCreated = 0;
   let totalSkipped = 0;
 
   try {
-    const result = await prisma.deal.createMany({
+    // Single createMany for entire batch (direct connection, no pooler)
+    const result = await prisma.company.createMany({
       data: records.map((d) => ({
         name: d.name,
-        contact: d.contact,
-        value: d.value,
-        stage: d.stage,
-        close: d.close || null,
-        leadId: d.leadId || null,
-        leadName: d.leadName || null,
-        owner: d.owner || null,
-        ownerId: d.ownerId || null,
-        orderNumber: d.orderNumber || null,
-        orderStatus: d.orderStatus || "New",
-        shippingMethod: d.shippingMethod || null,
-        shippingCost: d.shippingCost || null,
-        taxAmount: d.taxAmount || null,
-        subtotal: d.subtotal || null,
-        grandTotal: d.grandTotal || null,
-        notes: d.notes || null,
-        isQuote: false,
-        won: false,
-        lost: false,
+        industry: d.industry || "",
+        revenue: d.revenue || "$0",
+        status: d.status || "Lead",
+        phone: d.phone || undefined,
+        website: d.website || undefined,
+        country: d.country || undefined,
+        taxId: d.taxId || undefined,
+        paymentTerms: d.paymentTerms || undefined,
+        isCustomer: true,
+        contacts: 0,
       })),
       skipDuplicates: true,
     });
 
     totalCreated = result.count;
     totalSkipped = records.length - result.count;
-    console.log(`[IMPORT-API] Orders: created=${totalCreated}, skipped=${totalSkipped}`);
+    console.log(`[COMPANY-IMPORT-API] Inserted ${result.count} rows in single batch`);
 
     const elapsed = Math.round(performance.now() - t0);
-    return NextResponse.json({ created: totalCreated, skipped: totalSkipped, timeMs: elapsed });
+    console.log(`[COMPANY-IMPORT-API] Complete: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);
+
+    return NextResponse.json({
+      created: totalCreated,
+      skipped: totalSkipped,
+      timeMs: elapsed,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown DB error";
+    console.error(`[COMPANY-IMPORT-API] Error: ${msg}`);
     try { await prisma.$disconnect(); } catch { /* ignore */ }
-    return NextResponse.json({ created: totalCreated, skipped: totalSkipped, error: msg }, { status: 500 });
+
+    return NextResponse.json({
+      created: totalCreated,
+      skipped: totalSkipped,
+      error: msg,
+    }, { status: 500 });
   }
 }

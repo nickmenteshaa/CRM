@@ -139,8 +139,8 @@ export default function ImportModal<T extends { id: string }>({
           }
         }
 
-        // Skip client-side duplicate checking for large datasets when server handles it
-        const skipDupCheck = (config.bulkSaveBatch || config.bulkApiRoute) && config.existingData.length === 0;
+        // Skip client-side duplicate checking when using bulk API route — server handles it via skipDuplicates
+        const skipDupCheck = !!(config.bulkApiRoute);
 
         // Parse and validate rows in chunks to yield to browser
         const VALIDATE_CHUNK = 500;
@@ -224,7 +224,7 @@ export default function ImportModal<T extends { id: string }>({
   // ── Import ─────────────────────────────────────────────────────────────────
 
   const [timing, setTiming] = useState({ totalMs: 0, avgBatchMs: 0, batchCount: 0 });
-  const BATCH_SIZE = 200; // rows per server action call — smaller for Neon pooler reliability
+  const BATCH_SIZE = 2000; // rows per API call — large batches via direct DB connection
 
   const handleImport = async () => {
     cancelledRef.current = false;
@@ -250,22 +250,18 @@ export default function ImportModal<T extends { id: string }>({
       await yieldToBrowser();
     }
 
+    console.log(`[IMPORT] ${config.moduleName}: total parsed=${rows.length}, valid=${validNewRows.length}, duplicates=${dupRows.length}, errors=${errRows.length}`);
+
     await emit("Validating rows...", 0, 0);
     if (cancelledRef.current) { done(); return; }
 
     // ── Bulk import: prefer API route, fall back to server action ──
     const useBulk = !!(config.bulkApiRoute || config.bulkSaveBatch);
     if (useBulk && validNewRows.length > 0) {
-      // Build records in chunks to avoid blocking
-      const BUILD_CHUNK = 500;
-      const records: Omit<T, "id">[] = [];
-      for (let i = 0; i < validNewRows.length; i += BUILD_CHUNK) {
-        const chunkEnd = Math.min(i + BUILD_CHUNK, validNewRows.length);
-        for (let j = i; j < chunkEnd; j++) {
-          records.push(config.buildRecord(validNewRows[j].raw));
-        }
-        await emit(`Preparing records... ${chunkEnd.toLocaleString()} / ${validNewRows.length.toLocaleString()}`, 0, 0);
-      }
+      // Build all records synchronously (fast — just object mapping)
+      await emit("Preparing records...", 0, 0);
+      const records: Omit<T, "id">[] = validNewRows.map((r) => config.buildRecord(r.raw));
+      console.log(`[IMPORT] ${config.moduleName}: built ${records.length} records, sending to server...`);
 
       const totalBatches = Math.ceil(records.length / BATCH_SIZE);
 
@@ -273,21 +269,24 @@ export default function ImportModal<T extends { id: string }>({
         if (cancelledRef.current) { errors.push("Cancelled by user"); break; }
         const batchNum = Math.floor(i / BATCH_SIZE) + 1;
         const batch = records.slice(i, i + BATCH_SIZE);
-        await emit(`Writing batch ${batchNum} of ${totalBatches}...`, batchNum, totalBatches);
+        await emit(`Sending ${batch.length.toLocaleString()} rows to server (batch ${batchNum}/${totalBatches})...`, batchNum, totalBatches);
 
         const bt0 = performance.now();
         let br: { created: number; skipped: number; error?: string };
 
         if (config.bulkApiRoute) {
-          // API route: POST JSON directly, bypasses server action serialization
           try {
             const resp = await fetch(config.bulkApiRoute, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ records: batch }),
             });
-            br = await resp.json();
-            if (!resp.ok && !br.error) br.error = `HTTP ${resp.status}`;
+            if (!resp.ok) {
+              const text = await resp.text();
+              br = { created: 0, skipped: 0, error: `HTTP ${resp.status}: ${text.slice(0, 200)}` };
+            } else {
+              br = await resp.json();
+            }
           } catch (fetchErr) {
             br = { created: 0, skipped: 0, error: fetchErr instanceof Error ? fetchErr.message : "Network error" };
           }
@@ -295,7 +294,9 @@ export default function ImportModal<T extends { id: string }>({
           br = await config.bulkSaveBatch!(batch);
         }
 
-        batchTimings.push(performance.now() - bt0);
+        const batchMs = performance.now() - bt0;
+        batchTimings.push(batchMs);
+        console.log(`[IMPORT] ${config.moduleName}: batch ${batchNum}/${totalBatches} — created=${br.created}, skipped=${br.skipped}, error=${br.error ?? "none"}, time=${Math.round(batchMs)}ms`);
 
         if (br.error) {
           const rowStart = i + 1;
@@ -309,6 +310,8 @@ export default function ImportModal<T extends { id: string }>({
         processedRows += batch.length;
         await emit(`Wrote batch ${batchNum} of ${totalBatches}`, batchNum, totalBatches);
       }
+
+      console.log(`[IMPORT] ${config.moduleName}: DONE — imported=${result.imported}, skipped=${result.skipped}, failed=${result.failed}`);
     } else if (validNewRows.length > 0) {
       // ── Row-by-row fallback ──
       const total = validNewRows.length;

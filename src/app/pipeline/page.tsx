@@ -5,6 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import Modal from "@/components/Modal";
 import { useApp, type Deal } from "@/context/AppContext";
 import PageLoading from "@/components/PageLoading";
+import { formatDate as fmtDate } from "@/lib/date-utils";
 
 // ── Stage configuration ────────────────────────────────────────────────────────
 
@@ -55,15 +56,12 @@ function isStale(deal: Deal): boolean {
   return daysSince(ref) >= STALE_DAYS;
 }
 
-function formatDate(iso?: string) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
+// formatDate imported from date-utils as fmtDate
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function PipelinePage() {
-  const { deals, updateDeal, deleteDeal, loaded } = useApp();
+  const { deals, updateDeal, deleteDeal, loaded, timezone } = useApp();
   const [selected, setSelected]             = useState<Deal | null>(null);
   const [deleteConfirm, setDeleteConfirm]   = useState(false);
   const [editOpen, setEditOpen]             = useState(false);
@@ -228,8 +226,8 @@ export default function PipelinePage() {
               { label: "Contact",        value: selected.contact,                 icon: "👤" },
               { label: "Owner",          value: selected.owner || "—",            icon: "🧑‍💼" },
               { label: "Expected Close", value: selected.close || "—",            icon: "📅" },
-              { label: "Created",        value: formatDate(selected.createdDate), icon: "🗓" },
-              { label: "Last Updated",   value: formatDate(selected.updatedAt),   icon: "🔄" },
+              { label: "Created",        value: fmtDate(selected.createdDate, timezone, { includeYear: true }), icon: "🗓" },
+              { label: "Last Updated",   value: fmtDate(selected.updatedAt, timezone, { includeYear: true }),   icon: "🔄" },
             ].map(({ label, value, icon }) => (
               <div key={label}>
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{label}</p>

@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { ROLE_LABELS } from "@/context/AuthContext";
 import NotificationCenter from "@/components/NotificationCenter";
 import { useChat } from "@/context/ChatContext";
+import { useApp } from "@/context/AppContext";
 
 const nav = [
   { label: "Dashboard", icon: "▦", href: "/" },
@@ -39,8 +40,14 @@ export default function Sidebar() {
   const [search, setSearch] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const { companyName } = useApp();
 
   useEffect(() => { setMounted(true); }, []);
+
+  // Keep browser tab title in sync with company name
+  useEffect(() => {
+    document.title = `${companyName} — Car Sales Platform`;
+  }, [companyName]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -106,7 +113,7 @@ export default function Sidebar() {
                 CR
               </div>
               <div>
-                <h1 className="text-lg font-bold text-[#F9FAFB] tracking-tight">AutoCRM</h1>
+                <h1 className="text-lg font-bold text-[#F9FAFB] tracking-tight">{companyName}</h1>
                 <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Car Sales Platform</p>
               </div>
             </div>

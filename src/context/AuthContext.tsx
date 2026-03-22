@@ -206,9 +206,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function updateProfile(updates: { name?: string; email?: string }): Promise<void> {
     if (!user) return;
+    console.log("[Auth] updateProfile called with:", updates);
     const result = await dbUpdateEmployee(user.id, updates);
+    console.log("[Auth] dbUpdateEmployee result:", result.ok, result.employee?.name);
     if (result.ok && result.employee) {
-      setUser(toAuthUser(result.employee));
+      const updated = toAuthUser(result.employee);
+      console.log("[Auth] Setting user to:", updated.name, updated.email);
+      setUser(updated);
       await refreshUsers();
     }
   }

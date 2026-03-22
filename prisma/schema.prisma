@@ -34,7 +34,9 @@ model Lead {
   shippingAddress String?
   billingAddress  String?
   paymentTerms    String?                    // "net30" | "net60" | "cod" | "prepaid"
-  companyName     String?                    // customer's company name
+  companyName     String?                    // customer's company name (denormalized cache)
+  companyId       String?                    // FK to Company
+  company         Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
   country         String?
   preferredBrands String?                    // comma-separated brand list
   customerNotes   String?                    // internal notes about this customer
@@ -52,6 +54,7 @@ model Lead {
   @@index([country])
   @@index([createdAt])
   @@index([companyName])
+  @@index([companyId])
 }
 
 // ── Task ───────────────────────────────────────────────────────────────────────
@@ -143,7 +146,7 @@ model Message {
 // ── Company ────────────────────────────────────────────────────────────────────
 model Company {
   id        String   @id @default(cuid())
-  name      String
+  name      String   @unique
   industry  String
   contacts  Int      @default(0)
   revenue   String
@@ -158,6 +161,8 @@ model Company {
   isCustomer   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  leads     Lead[]
 }
 
 // ── Part (Spare Parts Catalog) ──────────────────────────────────────────────
@@ -374,4 +379,11 @@ model Employee {
   @@index([role])
   @@index([teamId])
   @@index([isActive])
+}
+
+// ── App Settings (key-value store for CRM-wide settings) ─────────────────────
+model AppSetting {
+  key       String   @id                        // e.g. "company_name", "timezone"
+  value     String
+  updatedAt DateTime @updatedAt
 }

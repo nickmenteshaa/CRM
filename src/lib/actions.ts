@@ -17,7 +17,8 @@ function mapLead(r: {
   customerType?: string | null; taxId?: string | null;
   shippingAddress?: string | null; billingAddress?: string | null;
   paymentTerms?: string | null;
-  companyName?: string | null; country?: string | null;
+  companyName?: string | null; companyId?: string | null;
+  country?: string | null;
   preferredBrands?: string | null; customerNotes?: string | null;
   [k: string]: unknown;
 }): Lead {
@@ -42,6 +43,7 @@ function mapLead(r: {
     billingAddress: r.billingAddress ?? undefined,
     paymentTerms: r.paymentTerms ?? undefined,
     companyName: r.companyName ?? undefined,
+    companyId: r.companyId ?? undefined,
     country: r.country ?? undefined,
     preferredBrands: r.preferredBrands ?? undefined,
     customerNotes: r.customerNotes ?? undefined,
@@ -141,10 +143,12 @@ function mapCompany(r: {
   revenue: string; status: string; website: string | null; phone: string | null;
   country?: string | null; taxId?: string | null; paymentTerms?: string | null;
   isSupplier?: boolean; isCustomer?: boolean;
+  _count?: { leads?: number };
   [k: string]: unknown;
 }): Company {
   return {
-    id: r.id, name: r.name, industry: r.industry, contacts: r.contacts,
+    id: r.id, name: r.name, industry: r.industry,
+    contacts: r._count?.leads ?? r.contacts,
     revenue: r.revenue, status: r.status,
     website: r.website ?? undefined, phone: r.phone ?? undefined,
     country: r.country ?? undefined, taxId: r.taxId ?? undefined,
@@ -165,7 +169,7 @@ export async function dbGetAll(): Promise<{
     prisma.task.findMany({ orderBy: { createdAt: "desc" } }),
     prisma.deal.findMany({ orderBy: { createdAt: "desc" } }),
     prisma.activity.findMany({ orderBy: { createdAt: "desc" } }),
-    prisma.company.findMany({ orderBy: { createdAt: "desc" } }),
+    prisma.company.findMany({ orderBy: { createdAt: "desc" }, include: { _count: { select: { leads: true } } } }),
     prisma.message.findMany({ orderBy: { createdAt: "desc" } }),
   ]);
   return {
@@ -197,6 +201,7 @@ export async function dbGetLeadsPaginated(opts: {
   country?: string;
   source?: string;
   ownerId?: string;
+  companyId?: string;
   sortKey?: string;
   sortDir?: "asc" | "desc";
 }): Promise<LeadsPageResult> {
@@ -241,6 +246,10 @@ export async function dbGetLeadsPaginated(opts: {
     } else {
       where.ownerId = opts.ownerId;
     }
+  }
+
+  if (opts.companyId && opts.companyId !== "all") {
+    where.companyId = opts.companyId;
   }
 
   // Build orderBy
@@ -311,6 +320,7 @@ export async function dbBulkCreateLeads(
             lastContact: d.lastContact || "Today",
             customerType: d.customerType || undefined,
             companyName: d.companyName || undefined,
+            companyId: d.companyId || undefined,
             country: d.country || undefined,
             preferredBrands: d.preferredBrands || undefined,
             taxId: d.taxId || undefined,
@@ -362,6 +372,7 @@ export async function dbCreateLead(
         carModel: data.carModel, carYear: data.carYear, carPrice: data.carPrice,
         carVin: data.carVin, carCondition: data.carCondition,
         customerType: data.customerType, companyName: data.companyName,
+        companyId: data.companyId,
         country: data.country, preferredBrands: data.preferredBrands,
         taxId: data.taxId, shippingAddress: data.shippingAddress,
         billingAddress: data.billingAddress, paymentTerms: data.paymentTerms,
@@ -401,6 +412,7 @@ export async function dbUpdateLead(id: string, updates: Partial<Lead>): Promise<
       ...(updates.carCondition !== undefined && { carCondition: updates.carCondition }),
       ...(updates.customerType !== undefined && { customerType: updates.customerType }),
       ...(updates.companyName  !== undefined && { companyName: updates.companyName }),
+      ...(updates.companyId    !== undefined && { companyId: updates.companyId || null }),
       ...(updates.country      !== undefined && { country: updates.country }),
       ...(updates.preferredBrands !== undefined && { preferredBrands: updates.preferredBrands }),
       ...(updates.taxId        !== undefined && { taxId: updates.taxId }),
@@ -740,6 +752,14 @@ export async function dbCreateActivity(
 
 // ── COMPANIES ─────────────────────────────────────────────────────────────────
 
+export async function dbGetCompanies(): Promise<Company[]> {
+  const rows = await prisma.company.findMany({
+    orderBy: { createdAt: "desc" },
+    include: { _count: { select: { leads: true } } },
+  });
+  return rows.map(mapCompany);
+}
+
 export async function dbCreateCompany(data: Omit<Company, "id">): Promise<Company> {
   const row = await prisma.company.create({ data });
   return mapCompany(row);
@@ -910,4 +930,26 @@ export async function dbAIFollowUp(
     await prisma.lead.update({ where: { id: leadId }, data: { followUpDraft } });
   }
   return followUpDraft;
+}
+
+// ── APP SETTINGS (key-value store) ──────────────────────────────────────────
+
+export async function dbGetAppSetting(key: string): Promise<string | null> {
+  const row = await prisma.appSetting.findUnique({ where: { key } });
+  return row?.value ?? null;
+}
+
+export async function dbSetAppSetting(key: string, value: string): Promise<void> {
+  await prisma.appSetting.upsert({
+    where: { key },
+    create: { key, value },
+    update: { value },
+  });
+}
+
+export async function dbGetAllAppSettings(): Promise<Record<string, string>> {
+  const rows = await prisma.appSetting.findMany();
+  const map: Record<string, string> = {};
+  for (const r of rows) map[r.key] = r.value;
+  return map;
 }

@@ -3,15 +3,24 @@
 import { useMemo } from "react";
 import Sidebar from "@/components/Sidebar";
 import PageLoading from "@/components/PageLoading";
-import { useApp, type Lead, type Deal, type Task, type Activity } from "@/context/AppContext";
+import { useApp, type Lead, type Deal, type Task, type Activity, type Company } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 
-// ── Known team members (mirrors DEMO_USERS in AuthContext) ──────────────────
+// ── Role → color mapping for dynamic employee cards ─────────────────────────
 
-const TEAM: { id: string; name: string; role: string; color: string }[] = [
-  { id: "u1", name: "Admin User",  role: "Admin",     color: "bg-purple-500" },
-  { id: "u2", name: "Sales Rep",   role: "Sales Rep",  color: "bg-blue-500" },
-];
+const ROLE_COLORS: Record<string, string> = {
+  admin:      "bg-purple-500",
+  manager:    "bg-amber-500",
+  senior_rep: "bg-emerald-500",
+  sales_rep:  "bg-blue-500",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  admin:      "Admin",
+  manager:    "Manager",
+  senior_rep: "Senior Rep",
+  sales_rep:  "Sales Rep",
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -199,15 +208,17 @@ function UserCard({ m }: { m: UserMetrics }) {
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
-  const { allLeads, allTasks, allDeals, activities, loaded } = useApp();
-  const { isAdmin } = useAuth();
+  const { allLeads, allTasks, allDeals, activities, companies, loaded } = useApp();
+  const { isAdmin, allUsers } = useAuth();
 
   // ── Compute all metrics ──────────────────────────────────────────────────
   const { teamMetrics, stageCounts, topDeals, kpis } = useMemo(() => {
-    // Per-user metrics
-    const teamMetrics: UserMetrics[] = TEAM.map((u) => ({
-      ...u,
+    // Per-user metrics — built from actual employees
+    const teamMetrics: UserMetrics[] = allUsers.map((u) => ({
       ...computeUserMetrics(u.id, allLeads, allTasks, allDeals, activities),
+      name: u.name,
+      role: ROLE_LABELS[u.role] ?? u.role,
+      color: ROLE_COLORS[u.role] ?? "bg-gray-500",
     }));
 
     // Unassigned metrics
@@ -266,7 +277,7 @@ export default function ReportsPage() {
     };
 
     return { teamMetrics, stageCounts, topDeals, kpis };
-  }, [allLeads, allTasks, allDeals, activities]);
+  }, [allLeads, allTasks, allDeals, activities, allUsers]);
 
   const maxStageCount = Math.max(...stageCounts.map((s) => s.count), 1);
 
@@ -373,6 +384,81 @@ export default function ReportsPage() {
             )}
           </div>
         </div>
+
+        {/* ── Company Insights ────────────────────────────────────────────── */}
+        {(() => {
+          // Build lead-to-company map
+          const leadCompany = new Map<string, string>();
+          for (const l of allLeads) {
+            if (l.companyId) leadCompany.set(l.id, l.companyId);
+          }
+
+          // Calculate per-company stats
+          const companyStats = companies.map((c) => {
+            const custCount = allLeads.filter((l) => l.companyId === c.id).length;
+            const companyLeadIds = new Set(allLeads.filter((l) => l.companyId === c.id).map((l) => l.id));
+            const companyDeals = allDeals.filter((d) => d.leadId && companyLeadIds.has(d.leadId));
+            const wonRevenue = companyDeals.filter((d) => d.won).reduce((s, d) => s + parseDollar(d.value || "0"), 0);
+            const pipelineValue = companyDeals.reduce((s, d) => s + parseDollar(d.value || "0"), 0);
+            return { id: c.id, name: c.name, custCount, wonRevenue, pipelineValue, dealCount: companyDeals.length };
+          });
+
+          const topByRevenue = [...companyStats].sort((a, b) => b.wonRevenue - a.wonRevenue).filter((c) => c.wonRevenue > 0).slice(0, 10);
+          const topByCustomers = [...companyStats].sort((a, b) => b.custCount - a.custCount).filter((c) => c.custCount > 0).slice(0, 10);
+          const maxRevenue = topByRevenue[0]?.wonRevenue || 1;
+          const maxCustCount = topByCustomers[0]?.custCount || 1;
+
+          return (
+            <div className="mt-8 mb-4">
+              <h3 className="text-lg font-semibold text-[#F9FAFB] mb-4">Company Insights</h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {/* Top companies by revenue */}
+                <div className="bg-[#111827] rounded-xl border border-[#1F2937] p-5">
+                  <h4 className="font-semibold text-gray-100 mb-4">Top Companies by Revenue</h4>
+                  {topByRevenue.length === 0 ? (
+                    <p className="text-sm text-gray-500 italic">No won deals yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {topByRevenue.map((c, i) => (
+                        <div key={c.id}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-gray-300 truncate">{i + 1}. {c.name}</span>
+                            <span className="text-xs text-gray-500">{fmtDollar(c.wonRevenue)} &middot; {c.dealCount} deals</span>
+                          </div>
+                          <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${(c.wonRevenue / maxRevenue) * 100}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Top companies by customer count */}
+                <div className="bg-[#111827] rounded-xl border border-[#1F2937] p-5">
+                  <h4 className="font-semibold text-gray-100 mb-4">Top Companies by Customers</h4>
+                  {topByCustomers.length === 0 ? (
+                    <p className="text-sm text-gray-500 italic">No linked customers yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {topByCustomers.map((c, i) => (
+                        <div key={c.id}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-gray-300 truncate">{i + 1}. {c.name}</span>
+                            <span className="text-xs text-gray-500">{c.custCount} customers &middot; {fmtDollar(c.pipelineValue)}</span>
+                          </div>
+                          <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${(c.custCount / maxCustCount) * 100}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         </>)}
       </main>
     </div>

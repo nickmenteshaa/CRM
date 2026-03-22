@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import ChatPanel from "@/components/ChatPanel";
 import ImportModal from "@/components/ImportModal";
 import { orderImportConfig, orderItemImportConfig } from "@/lib/import-configs";
+import { formatDate as fmtDate } from "@/lib/date-utils";
 import {
   dbGetSparePartsData,
   dbCreateOrderLine, dbUpdateOrderLine, dbDeleteOrderLine,
@@ -74,10 +75,7 @@ function displayMoney(s?: string): string {
   return fmtMoney(parseMoney(s));
 }
 
-function formatDate(iso?: string) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
+// formatDate is imported from date-utils as fmtDate
 
 function SortHeader({ label, sortKey, currentSort, currentDir, onSort }: { label: string; sortKey: SortKey; currentSort: SortKey | null; currentDir: SortDir; onSort: (k: SortKey) => void }) {
   const active = currentSort === sortKey;
@@ -112,7 +110,7 @@ function LabeledSelect({ label, value, onChange, options }: { label: string; val
 }
 
 export default function DealsPage() {
-  const { deals, addDeal, updateDeal, deleteDeal, messages, addMessage, loaded, allLeads } = useApp();
+  const { deals, addDeal, updateDeal, deleteDeal, messages, addMessage, loaded, allLeads, reloadFromDb, timezone } = useApp();
   const { isAdmin, user, allUsers, canAccessOwnerId } = useAuth();
 
   function canEditDeal(deal: Deal) {
@@ -498,7 +496,7 @@ export default function DealsPage() {
               { label: "Contact",        value: currentSelected.contact,                 icon: "👤" },
               { label: "Owner",          value: currentSelected.owner || "—",            icon: "🧑‍💼" },
               { label: "Expected Close", value: currentSelected.close || "—",            icon: "📅" },
-              { label: "Created",        value: formatDate(currentSelected.createdDate), icon: "🗓" },
+              { label: "Created",        value: fmtDate(currentSelected.createdDate, timezone, { includeYear: true }), icon: "🗓" },
             ].map(({ label, value, icon }) => (
               <div key={label}>
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{label}</p>
@@ -830,7 +828,7 @@ export default function DealsPage() {
             onBulkBatch: dbBulkCreateDeals,
             bulkApiRoute: "/api/import/orders",
           })}
-          onClose={() => setImportOrdersOpen(false)}
+          onClose={() => { setImportOrdersOpen(false); reloadFromDb(); }}
         />
       )}
 
@@ -857,7 +855,7 @@ export default function DealsPage() {
             onBulkBatch: dbBulkCreateOrderLines,
             bulkApiRoute: "/api/import/order-items",
           })}
-          onClose={() => setImportItemsOpen(false)}
+          onClose={() => { setImportItemsOpen(false); reloadFromDb(); }}
         />
       )}
     </div>

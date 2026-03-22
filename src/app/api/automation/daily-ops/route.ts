@@ -4,20 +4,85 @@ import { getDirectPrisma } from "@/lib/db-direct";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Valid run slots
+// ── Constants ──────────────────────────────────────────────────────────────────
+
 const VALID_RUNS = ["morning", "mid-morning", "midday", "early-afternoon", "late-afternoon", "eod"] as const;
 type RunSlot = typeof VALID_RUNS[number];
 
-// Order status progression
+// 3 creation slots per day: morning, midday, late-afternoon
+const CREATION_SLOTS: RunSlot[] = ["morning", "midday", "late-afternoon"];
+
+// Order status flow
 const STATUS_FLOW = ["New", "confirmed", "shipped", "delivered", "invoiced"];
+
+// Deal pipeline stages
+const STAGE_FLOW = [
+  "New Opportunity",
+  "Prospecting",
+  "Qualified",
+  "Proposal",
+  "Negotiation",
+  "Closed Won",
+] as const;
+
+// Per-stage advance probability (conservative — gradual movement)
+const STAGE_ADVANCE_CHANCE: Record<string, number> = {
+  "New Opportunity": 0.30,
+  "Prospecting":     0.25,
+  "Qualified":       0.20,
+  "Proposal":        0.15,
+  "Negotiation":     0.12,
+};
+
+// ── Revenue-calibrated deal values ─────────────────────────────────────────────
+// Target: $100M/year ≈ $275k/day ≈ $45k per run (6 runs)
+// With ~30% win rate and avg deal ~$1,900:
+//   need ~40 new deals/day → ~13 per creation slot (3 slots)
+//
+// Value tiers:
+//   40% small  $300–$800   (avg $550)
+//   40% medium $800–$2,500 (avg $1,650)
+//   20% large  $2,500–$8,000 (avg $5,250)
+//   Weighted avg ≈ $1,930
+
+function generateDealValue(): number {
+  const r = Math.random();
+  if (r < 0.40)      return randInt(300, 800);    // small
+  if (r < 0.80)      return randInt(800, 2500);   // medium
+  return randInt(2500, 8000);                      // large
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
 function randInt(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
+// Round-robin rep assignment — picks rep with fewest active deals
+function pickLeastLoadedRep(
+  reps: { id: string; name: string }[],
+  dealCounts: Map<string, number>,
+): { id: string; name: string } {
+  let minCount = Infinity;
+  let best = reps[0];
+  // Shuffle first so ties are random
+  const shuffled = [...reps].sort(() => Math.random() - 0.5);
+  for (const rep of shuffled) {
+    const count = dealCounts.get(rep.id) ?? 0;
+    if (count < minCount) {
+      minCount = count;
+      best = rep;
+    }
+  }
+  // Increment for next call within same batch
+  dealCounts.set(best.id, (dealCounts.get(best.id) ?? 0) + 1);
+  return best;
+}
+
+// ── Main handler ───────────────────────────────────────────────────────────────
+
 export async function POST(request: NextRequest) {
   const t0 = performance.now();
 
-  // Simple auth: require secret or session
   const authHeader = request.headers.get("x-automation-key");
   const expectedKey = process.env.AUTOMATION_SECRET || "crm-auto-2024";
   if (authHeader !== expectedKey) {
@@ -39,8 +104,12 @@ export async function POST(request: NextRequest) {
   const log: string[] = [];
 
   try {
-    // ── 1. Progress existing orders (all runs) ────────────────────────
-    const progressCount = randInt(3, 8);
+    // ── 1. Progress order statuses (all runs) ──────────────────────────
+    // Cap deliveries: only 2-5 orders move to "delivered" per run (10-30/day)
+    const maxDeliveries = randInt(2, 5);
+    let deliveredThisRun = 0;
+
+    const progressCount = randInt(3, 6);
     const ordersToProgress = await prisma.deal.findMany({
       where: {
         orderNumber: { not: null },
@@ -48,40 +117,102 @@ export async function POST(request: NextRequest) {
         isQuote: false,
       },
       take: progressCount,
-      orderBy: { updatedAt: "asc" }, // oldest first
+      orderBy: { updatedAt: "asc" },
     });
 
     let progressed = 0;
     for (const order of ordersToProgress) {
       const currentIdx = STATUS_FLOW.indexOf(order.orderStatus ?? "New");
-      if (currentIdx >= 0 && currentIdx < STATUS_FLOW.length - 1) {
-        const nextStatus = STATUS_FLOW[currentIdx + 1];
-        await prisma.deal.update({
-          where: { id: order.id },
-          data: {
-            orderStatus: nextStatus,
-            // Mark as won when invoiced
-            ...(nextStatus === "invoiced" ? { won: true, stage: "Closed Won" } : {}),
-          },
-        });
-        progressed++;
-      }
-    }
-    log.push(`Progressed ${progressed} orders to next status`);
+      if (currentIdx < 0 || currentIdx >= STATUS_FLOW.length - 1) continue;
 
-    // ── 2. Small inventory adjustments (all runs) ─────────────────────
-    const adjustCount = randInt(3, 7);
+      const nextStatus = STATUS_FLOW[currentIdx + 1];
+
+      // Enforce delivery cap
+      if (nextStatus === "delivered") {
+        if (deliveredThisRun >= maxDeliveries) continue;
+        deliveredThisRun++;
+      }
+
+      await prisma.deal.update({
+        where: { id: order.id },
+        data: {
+          orderStatus: nextStatus,
+          ...(nextStatus === "invoiced" ? { won: true, stage: "Closed Won" } : {}),
+        },
+      });
+      progressed++;
+    }
+    log.push(`Progressed ${progressed} orders (${deliveredThisRun} delivered, cap ${maxDeliveries})`);
+
+    // ── 2. Progress deal pipeline stages (all runs) ────────────────────
+    // Small batch per run — gradual, not mass-move
+    const stageConsiderCount = randInt(8, 15);
+    const dealsToConsider = await prisma.deal.findMany({
+      where: {
+        stage: { in: ["New Opportunity", "Prospecting", "Qualified", "Proposal", "Negotiation"] },
+        won: false,
+        lost: false,
+      },
+      orderBy: { updatedAt: "asc" },
+      take: stageConsiderCount,
+    });
+
+    let dealsProgressed = 0;
+    for (const deal of dealsToConsider) {
+      const chance = STAGE_ADVANCE_CHANCE[deal.stage] ?? 0;
+      if (Math.random() > chance) continue;
+
+      const currentIdx = STAGE_FLOW.indexOf(deal.stage as typeof STAGE_FLOW[number]);
+      if (currentIdx < 0 || currentIdx >= STAGE_FLOW.length - 1) continue;
+
+      const nextStage = STAGE_FLOW[currentIdx + 1];
+      const isWon = nextStage === "Closed Won";
+
+      await prisma.deal.update({
+        where: { id: deal.id },
+        data: {
+          stage: nextStage,
+          ...(isWon ? { won: true } : {}),
+        },
+      });
+      dealsProgressed++;
+    }
+    log.push(`Progressed ${dealsProgressed}/${dealsToConsider.length} deals to next pipeline stage`);
+
+    // ── 3. Realistic deal churn (mid-morning + late-afternoon) ─────────
+    if (["mid-morning", "late-afternoon"].includes(run)) {
+      const lostCandidates = await prisma.deal.findMany({
+        where: {
+          stage: { in: ["Proposal", "Negotiation"] },
+          won: false,
+          lost: false,
+        },
+        take: 8,
+      });
+      let dealsLost = 0;
+      for (const deal of lostCandidates) {
+        if (Math.random() < 0.08) {
+          await prisma.deal.update({
+            where: { id: deal.id },
+            data: { stage: "Closed Lost", lost: true },
+          });
+          dealsLost++;
+        }
+      }
+      if (dealsLost > 0) log.push(`Marked ${dealsLost} deals as Closed Lost`);
+    }
+
+    // ── 4. Inventory adjustments (all runs) ────────────────────────────
+    const adjustCount = randInt(2, 5);
     const inventoryItems = await prisma.inventory.findMany({
       where: { quantityOnHand: { gt: 0 } },
-      take: adjustCount * 3, // get more to randomly pick from
+      take: adjustCount * 3,
     });
 
     let adjusted = 0;
     if (inventoryItems.length > 0) {
-      // Shuffle and take adjustCount
       const shuffled = inventoryItems.sort(() => Math.random() - 0.5).slice(0, adjustCount);
       for (const inv of shuffled) {
-        // Simulate sales: reduce stock by 1-5 units
         const reduction = randInt(1, Math.min(5, inv.quantityOnHand));
         await prisma.inventory.update({
           where: { id: inv.id },
@@ -92,9 +223,11 @@ export async function POST(request: NextRequest) {
     }
     log.push(`Adjusted inventory for ${adjusted} items`);
 
-    // ── 3. Create small order batch (morning + midday + late-afternoon) ─
-    if (["morning", "midday", "late-afternoon"].includes(run)) {
-      const newOrderCount = randInt(2, 4);
+    // ── 5. Create new deals (3 creation slots only) ────────────────────
+    // 20-60 deals/day ÷ 3 slots = 7-20 per slot
+    if (CREATION_SLOTS.includes(run)) {
+      const newDealCount = randInt(7, 20);
+
       const customers = await prisma.lead.findMany({
         where: { status: { in: ["Qualified", "Converted"] } },
         take: 50,
@@ -106,6 +239,21 @@ export async function POST(request: NextRequest) {
       });
 
       if (customers.length > 0 && reps.length > 0) {
+        // Build rep workload map for balanced assignment
+        const repLoadRaw = await prisma.deal.groupBy({
+          by: ["ownerId"],
+          where: {
+            ownerId: { in: reps.map((r) => r.id) },
+            won: false,
+            lost: false,
+          },
+          _count: true,
+        });
+        const repLoads = new Map<string, number>();
+        for (const r of repLoadRaw) {
+          if (r.ownerId) repLoads.set(r.ownerId, r._count);
+        }
+
         // Get next order number
         const lastOrder = await prisma.deal.findFirst({
           where: { orderNumber: { not: null } },
@@ -118,12 +266,15 @@ export async function POST(request: NextRequest) {
           if (match) nextNum = parseInt(match[1], 10) + 1;
         }
 
-        const orders = [];
-        for (let i = 0; i < newOrderCount; i++) {
+        const deals = [];
+        let batchValue = 0;
+        for (let i = 0; i < newDealCount; i++) {
           const cust = pick(customers);
-          const rep = pick(reps);
-          const value = randInt(150, 5000);
-          orders.push({
+          const rep = pickLeastLoadedRep(reps, repLoads);
+          const value = generateDealValue();
+          batchValue += value;
+
+          deals.push({
             name: `Auto Order ${cust.name.split(" ")[0]}`,
             contact: cust.name,
             value: `$${value.toLocaleString()}`,
@@ -140,14 +291,14 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        await prisma.deal.createMany({ data: orders, skipDuplicates: true });
-        log.push(`Created ${orders.length} new orders`);
+        await prisma.deal.createMany({ data: deals, skipDuplicates: true });
+        log.push(`Created ${deals.length} deals (batch value: $${batchValue.toLocaleString()})`);
       } else {
-        log.push("Skipped order creation: no qualified customers or reps");
+        log.push("Skipped deal creation: no qualified customers or reps");
       }
     }
 
-    // ── 4. Progress some customer statuses (mid-morning + early-afternoon) ─
+    // ── 6. Progress customer statuses (mid-morning + early-afternoon) ──
     if (["mid-morning", "early-afternoon"].includes(run)) {
       const leadsToProgress = await prisma.lead.findMany({
         where: { status: { in: ["New", "Contacted"] } },
@@ -170,18 +321,9 @@ export async function POST(request: NextRequest) {
       log.push(`Progressed ${leadsMoved} customer statuses`);
     }
 
-    // ── 5. Low stock check (EOD only) ─────────────────────────────────
+    // ── 7. Low stock check (EOD only) ──────────────────────────────────
     let lowStockItems: { partName: string; qty: number; reorder: number }[] = [];
     if (run === "eod") {
-      const lowStock = await prisma.inventory.findMany({
-        where: {
-          quantityOnHand: { lte: prisma.inventory.fields.reorderPoint as unknown as number },
-        },
-        include: { part: { select: { name: true, sku: true } } },
-        take: 50,
-      });
-
-      // Fallback: just query items with qty <= reorderPoint via raw
       const rawLow = await prisma.$queryRaw<{ name: string; sku: string; quantityOnHand: number; reorderPoint: number }[]>`
         SELECT p.name, p.sku, i."quantityOnHand", i."reorderPoint"
         FROM "Inventory" i
@@ -200,7 +342,7 @@ export async function POST(request: NextRequest) {
       log.push(`Low stock items: ${lowStockItems.length}`);
     }
 
-    // ── 6. EOD Summary ────────────────────────────────────────────────
+    // ── 8. EOD Summary ─────────────────────────────────────────────────
     let summary: Record<string, unknown> | null = null;
     if (run === "eod") {
       const [totalOrders, totalCustomers, totalParts, totalInventory] = await Promise.all([
@@ -216,12 +358,18 @@ export async function POST(request: NextRequest) {
         _count: true,
       });
 
+      const dealsByStage = await prisma.deal.groupBy({
+        by: ["stage"],
+        _count: true,
+      });
+
       summary = {
         totalOrders,
         totalCustomers,
         totalParts,
         totalInventory,
         ordersByStatus: ordersByStatus.map((g) => ({ status: g.orderStatus, count: g._count })),
+        dealsByStage: dealsByStage.map((g) => ({ stage: g.stage, count: g._count })),
         lowStockCount: lowStockItems.length,
         lowStockItems: lowStockItems.slice(0, 10),
       };
