@@ -978,3 +978,49 @@ export async function dbGetAllAppSettings(): Promise<Record<string, string>> {
   for (const r of rows) map[r.key] = r.value;
   return map;
 }
+
+// ── DASHBOARD COUNTS (lightweight COUNT queries) ─────────────────────────────
+
+export type DashboardCounts = {
+  totalContacts: number;
+  qualifiedContacts: number;
+  totalDeals: number;
+  openDeals: number;
+  wonDeals: number;
+  totalCompanies: number;
+  totalTasks: number;
+  completedTasks: number;
+};
+
+export async function dbGetDashboardCounts(): Promise<DashboardCounts> {
+  const [
+    totalContacts,
+    qualifiedContacts,
+    totalDeals,
+    openDeals,
+    wonDeals,
+    totalCompanies,
+    totalTasks,
+    completedTasks,
+  ] = await Promise.all([
+    prisma.lead.count(),
+    prisma.lead.count({ where: { status: "Qualified" } }),
+    prisma.deal.count(),
+    prisma.deal.count({ where: { won: false, lost: false } }),
+    prisma.deal.count({ where: { won: true } }),
+    prisma.company.count(),
+    prisma.task.count(),
+    prisma.task.count({ where: { done: true } }),
+  ]);
+
+  return {
+    totalContacts,
+    qualifiedContacts,
+    totalDeals,
+    openDeals,
+    wonDeals,
+    totalCompanies,
+    totalTasks,
+    completedTasks,
+  };
+}

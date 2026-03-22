@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import PageLoading from "@/components/PageLoading";
 import EmptyState from "@/components/EmptyState";
@@ -8,6 +8,7 @@ import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
 import { nowDateString } from "@/lib/date-utils";
+import { dbGetDashboardCounts, type DashboardCounts } from "@/lib/actions";
 
 function parseDollar(v: string): number {
   return parseFloat(v.replace(/[^0-9.\-]/g, "")) || 0;
@@ -33,6 +34,12 @@ const PIPELINE_STAGES = [
 export default function Home() {
   const { leads, deals, tasks, loaded, timezone } = useApp();
   const { user } = useAuth();
+  const [dbCounts, setDbCounts] = useState<DashboardCounts | null>(null);
+
+  // Fetch real DB counts on mount
+  useEffect(() => {
+    dbGetDashboardCounts().then(setDbCounts).catch(console.error);
+  }, [loaded]);
 
   const stats = useMemo(() => {
     const openDeals = deals.filter((d) => !d.won && !d.lost);
@@ -54,6 +61,11 @@ export default function Home() {
     return { openDeals: openDeals.length, pipelineValue, wonValue, wonCount: wonDeals.length, tasksDueToday, stageData, maxStageCount };
   }, [deals, tasks]);
 
+  // Use DB counts when available, fall back to client-side
+  const totalContacts = dbCounts?.totalContacts ?? leads.length;
+  const qualifiedContacts = dbCounts?.qualifiedContacts ?? leads.filter((l) => l.status === "Qualified").length;
+  const completedTasks = dbCounts?.completedTasks ?? tasks.filter((t) => t.done).length;
+
   const recentLeads = leads.slice(0, 5);
 
   return (
@@ -74,10 +86,10 @@ export default function Home() {
             {/* KPI Cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
               {[
-                { label: "Total Contacts", value: String(leads.length),  sub: `${leads.filter((l) => l.status === "Qualified").length} qualified`, icon: "👤", color: "from-blue-500 to-blue-600" },
-                { label: "Open Deals",     value: String(stats.openDeals), sub: `$${stats.pipelineValue.toLocaleString()} pipeline`, icon: "💼", color: "from-purple-500 to-purple-600" },
-                { label: "Revenue Won",    value: `$${stats.wonValue.toLocaleString()}`, sub: `${stats.wonCount} deals closed`, icon: "💰", color: "from-green-500 to-green-600" },
-                { label: "Tasks Due Today", value: String(stats.tasksDueToday), sub: `${tasks.filter((t) => t.done).length} completed total`, icon: "✓", color: "from-amber-500 to-orange-500" },
+                { label: "Total Contacts", value: totalContacts.toLocaleString(),  sub: `${qualifiedContacts.toLocaleString()} qualified`, icon: "👤", color: "from-blue-500 to-blue-600" },
+                { label: "Open Deals",     value: (dbCounts?.openDeals ?? stats.openDeals).toLocaleString(), sub: `$${stats.pipelineValue.toLocaleString()} pipeline`, icon: "💼", color: "from-purple-500 to-purple-600" },
+                { label: "Revenue Won",    value: `$${stats.wonValue.toLocaleString()}`, sub: `${(dbCounts?.wonDeals ?? stats.wonCount).toLocaleString()} deals closed`, icon: "💰", color: "from-green-500 to-green-600" },
+                { label: "Tasks Due Today", value: String(stats.tasksDueToday), sub: `${completedTasks.toLocaleString()} completed total`, icon: "✓", color: "from-amber-500 to-orange-500" },
               ].map((stat) => (
                 <div key={stat.label} className="bg-[#111827] rounded-2xl border border-[#1F2937] p-5 shadow-sm shadow-black/10 hover:shadow-md hover:shadow-black/20 transition-shadow">
                   <div className="flex items-center justify-between mb-3">
