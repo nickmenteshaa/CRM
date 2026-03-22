@@ -404,3 +404,32 @@ model AuditLog {
   @@index([userId])
   @@index([createdAt])
 }
+
+// ── Email (real IMAP/SMTP integration) ──────────────────────────────────────
+
+model Email {
+  id          String   @id @default(cuid())
+  messageId   String?  @unique              // IMAP Message-ID for dedup
+  folder      String   @default("INBOX")    // INBOX, Sent, Drafts
+  fromAddress String                        // sender email
+  fromName    String?                       // sender display name
+  toAddress   String                        // recipient email(s)
+  cc          String?                       // CC recipients
+  subject     String   @default("")
+  bodyText    String?                       // plain text body
+  bodyHtml    String?                       // HTML body
+  date        DateTime                      // email date
+  isRead      Boolean  @default(false)
+  isStarred   Boolean  @default(false)
+  hasAttachment Boolean @default(false)
+  employeeId  String                        // owner mailbox
+  leadId      String?                       // linked customer
+  companyId   String?                       // linked company
+  dealId      String?                       // linked deal
+  createdAt   DateTime @default(now())
+
+  @@index([employeeId, folder])
+  @@index([date])
+  @@index([leadId])
+  @@index([companyId])
+}

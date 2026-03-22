@@ -22,6 +22,7 @@ const nav = [
   { label: "Parts Catalog", icon: "⚙", href: "/parts" },
   { label: "Suppliers", icon: "🏭", href: "/suppliers" },
   { label: "Inventory", icon: "📦", href: "/inventory" },
+  { label: "Email", icon: "✉", href: "/email" },
   { label: "Team Chat", icon: "💬", href: "/chat" },
   { label: "Audit Log", icon: "📜", href: "/audit" },
 ];
