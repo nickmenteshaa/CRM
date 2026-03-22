@@ -427,6 +427,152 @@ export async function POST(request: NextRequest) {
       log.push("EOD summary generated");
     }
 
+    // ── 9. Employee chat generation (context-aware) ───────────────────
+    if (growth > 0) {
+      const allEmps = await prisma.employee.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true, role: true },
+      });
+      const managers = allEmps.filter((e) => e.role === "manager" || e.role === "admin");
+      const salesReps = allEmps.filter((e) => e.role === "sales_rep");
+      const seniorReps = allEmps.filter((e) => e.role === "senior_rep");
+
+      // Message templates by context
+      const salesMessages = [
+        "Just closed the order, customer confirmed via email",
+        "Following up with the distributor, they need updated pricing",
+        "New inquiry came in, adding to pipeline",
+        "Customer wants expedited shipping, checking with warehouse",
+        "Quote sent, waiting for approval",
+        "Good call with the buyer, they're interested in bulk order",
+        "Need to check stock for this SKU before confirming",
+        "Customer asked about payment terms, forwarding to accounts",
+      ];
+      const warehouseMessages = [
+        "Stock checked, we have enough for this order",
+        "Running low on a few items, flagging for reorder",
+        "Shipment packed and ready for dispatch",
+        "Delivery scheduled for tomorrow morning",
+        "Received stock update from supplier",
+        "Inventory count completed for section B",
+      ];
+      const managerMessages = [
+        "Let's review the pipeline in today's standup",
+        "Good progress team, keep pushing on the open quotes",
+        "Prioritize the large distributor accounts this week",
+        "Make sure all pending orders are confirmed by EOD",
+        "Need status update on the delayed shipments",
+        "Weekly target looking good, let's maintain the pace",
+      ];
+
+      const msgCount = Math.max(2, Math.round(randInt(5, 15) * mult));
+      let msgsCreated = 0;
+
+      // Create group chat if triggered by events (1-3/day, only on certain slots)
+      const shouldCreateGroup = ["morning", "midday"].includes(run) && Math.random() < 0.4 * growth;
+      if (shouldCreateGroup && progressed > 0 && managers.length > 0 && salesReps.length > 0) {
+        // Pick a contextual group reason
+        const groupTypes = [
+          { name: `Weekly Sales Push ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`, reason: "sales coordination" },
+          { name: `Order Follow-up Batch`, reason: "order handling" },
+          { name: `Stock Review ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`, reason: "inventory check" },
+        ];
+
+        // Add event-specific groups
+        if (deliveredThisRun > 2) {
+          groupTypes.push({ name: `Delivery Batch Confirmation`, reason: "delivery update" });
+        }
+
+        const gt = pick(groupTypes);
+        const groupMembers = [
+          pick(managers).id,
+          ...salesReps.sort(() => Math.random() - 0.5).slice(0, randInt(2, 4)).map((r) => r.id),
+        ];
+        // Deduplicate
+        const uniqueMembers = [...new Set(groupMembers)];
+
+        const conv = await prisma.chatConversation.create({
+          data: {
+            type: "group",
+            name: gt.name,
+            createdBy: uniqueMembers[0],
+            members: JSON.stringify(uniqueMembers),
+          },
+        });
+
+        // Seed 2-4 messages in the new group
+        const groupMsgCount = randInt(2, 4);
+        for (let i = 0; i < groupMsgCount; i++) {
+          const sender = pick(allEmps.filter((e) => uniqueMembers.includes(e.id)));
+          const msgs = sender.role === "manager" || sender.role === "admin" ? managerMessages : salesMessages;
+          await prisma.chatMessage.create({
+            data: {
+              conversationId: conv.id,
+              senderId: sender.id,
+              senderName: sender.name,
+              senderRole: sender.role,
+              body: pick(msgs),
+            },
+          });
+          msgsCreated++;
+        }
+        log.push(`Chat: created group "${gt.name}" (${uniqueMembers.length} members, ${groupMsgCount} msgs)`);
+      }
+
+      // Private messages between reps and managers
+      const privateMsgCount = Math.max(1, msgCount - msgsCreated);
+      for (let i = 0; i < privateMsgCount; i++) {
+        const sender = pick(allEmps);
+        const receiver = pick(allEmps.filter((e) => e.id !== sender.id));
+        if (!receiver) continue;
+
+        // Find or create DM conversation
+        const existingConvs = await prisma.chatConversation.findMany({
+          where: { type: "direct" },
+          select: { id: true, members: true },
+          take: 50,
+          orderBy: { updatedAt: "desc" },
+        });
+
+        let convId: string | undefined;
+        for (const c of existingConvs) {
+          try {
+            const m = JSON.parse(c.members) as string[];
+            if (m.includes(sender.id) && m.includes(receiver.id)) { convId = c.id; break; }
+          } catch { /* skip */ }
+        }
+
+        if (!convId) {
+          const conv = await prisma.chatConversation.create({
+            data: {
+              type: "direct",
+              createdBy: sender.id,
+              members: JSON.stringify([sender.id, receiver.id]),
+            },
+          });
+          convId = conv.id;
+        }
+
+        const msgs = sender.role === "manager" || sender.role === "admin"
+          ? managerMessages
+          : sender.role === "sales_rep"
+            ? salesMessages
+            : warehouseMessages;
+
+        await prisma.chatMessage.create({
+          data: {
+            conversationId: convId,
+            senderId: sender.id,
+            senderName: sender.name,
+            senderRole: sender.role,
+            body: pick(msgs),
+          },
+        });
+        msgsCreated++;
+      }
+      log.push(`Chat: ${msgsCreated} messages sent`);
+    }
+
     // ── Audit log: record this automation run ──────────────────────────
     await auditLog({
       action: `automation.${run}`,
