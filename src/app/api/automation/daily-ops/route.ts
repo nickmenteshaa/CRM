@@ -35,25 +35,57 @@ const STAGE_ADVANCE_CHANCE: Record<string, number> = {
 };
 
 // ── Revenue model ───────────────────────────────────────────────────────────────
-// Target: $50M/year ≈ $192k/business day (260 days) ≈ $32k per run (6 runs)
+// Target: $50M/year ≈ $192k/business day at full capacity
+// Gradual ramp-up from system start date:
+//   Week 1: ~30% capacity (light activity, small orders only)
+//   Week 2: ~55% capacity (slight increase, medium orders appear)
+//   Week 3: ~80% capacity (near normal)
+//   Week 4+: 100% capacity (full operations)
 //
-// Order value tiers (aligned with real spare-parts B2B):
-//   50% small   $300–$2,000   (avg ~$1,150)
-//   35% medium  $2,000–$8,000 (avg ~$5,000)
-//   15% large   $8,000–$25,000 (avg ~$16,500)
-//   Weighted avg ≈ $4,800
-//
-// With ~30% win rate: need ~15-35 new orders/day → 4-9 per creation slot (4 slots)
-// Daily new order value: 25 orders × $4,800 avg = ~$120k pipeline added
-// Daily closings: ~8 orders × $4,800 = ~$38k → annualized ~$10M closed
-// But existing pipeline closings add: ~$150k/day → $39M additional
-// Total annual ≈ $49-51M target range
+// START_DATE controls when the live timeline begins
+const START_DATE = new Date("2026-03-23T05:00:00+04:00"); // Monday, Dubai time
 
-function generateOrderValue(): number {
+/** How many business days since system start */
+function businessDaysSinceStart(): number {
+  const now = new Date();
+  let days = 0;
+  const d = new Date(START_DATE);
+  while (d < now) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) days++; // skip weekends
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+/** Growth multiplier based on system age (0.3 → 1.0 over 4 weeks) */
+function growthMultiplier(): number {
+  const days = businessDaysSinceStart();
+  if (days <= 0) return 0; // not started yet
+  if (days <= 5) return 0.30;   // week 1: 30%
+  if (days <= 10) return 0.55;  // week 2: 55%
+  if (days <= 15) return 0.80;  // week 3: 80%
+  return 1.0;                   // week 4+: full
+}
+
+/** Order value tiers — restricted in early weeks */
+function generateOrderValue(growth: number): number {
   const r = Math.random();
-  if (r < 0.50) return randInt(300, 2000);     // small
-  if (r < 0.85) return randInt(2000, 8000);    // medium
-  return randInt(8000, 25000);                  // large
+  if (growth < 0.5) {
+    // Week 1: small orders only ($300–$2k), rare medium ($2k–$3.5k)
+    if (r < 0.85) return randInt(300, 2000);
+    return randInt(2000, 3500);
+  }
+  if (growth < 0.8) {
+    // Week 2-3: small + medium, occasional large
+    if (r < 0.55) return randInt(300, 2000);
+    if (r < 0.90) return randInt(2000, 8000);
+    return randInt(8000, 15000);
+  }
+  // Full operations
+  if (r < 0.50) return randInt(300, 2000);
+  if (r < 0.85) return randInt(2000, 8000);
+  return randInt(8000, 25000);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────────
@@ -61,7 +93,6 @@ function generateOrderValue(): number {
 function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
 function randInt(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-// Weighted rep pick — least-loaded gets priority but with randomness
 function pickLeastLoadedRep(
   reps: { id: string; name: string }[],
   dealCounts: Map<string, number>,
@@ -80,12 +111,12 @@ function pickLeastLoadedRep(
 // Slot-based activity multiplier (some slots are busier)
 function slotMultiplier(run: RunSlot): number {
   switch (run) {
-    case "morning":           return 1.2;  // peak start
+    case "morning":           return 1.2;
     case "mid-morning":       return 1.0;
-    case "midday":            return 0.8;  // lunch slowdown
+    case "midday":            return 0.8;
     case "early-afternoon":   return 1.1;
-    case "late-afternoon":    return 0.7;  // winding down
-    case "eod":               return 0.5;  // end of day
+    case "late-afternoon":    return 0.7;
+    case "eod":               return 0.5;
     default:                  return 1.0;
   }
 }
@@ -114,15 +145,23 @@ export async function POST(request: NextRequest) {
 
   const prisma = getDirectPrisma();
   const log: string[] = [];
-  const mult = slotMultiplier(run);
+  const growth = growthMultiplier();
+  const mult = slotMultiplier(run) * growth;
+
+  // Before start date → do nothing except inventory adjustments
+  if (growth <= 0) {
+    log.push("System not yet started (before START_DATE)");
+    return NextResponse.json({ run, timestamp: new Date().toISOString(), log, timeMs: 0 });
+  }
+
+  log.push(`Growth: ${Math.round(growth * 100)}% | Slot: ${run} (×${mult.toFixed(2)})`);
 
   try {
     // ── 1. Progress order statuses (all runs) ──────────────────────────
-    // ~5-10 orders progress per run, cap deliveries at 3-6/run (18-36/day)
-    const maxDeliveries = randInt(3, 6);
+    const maxDeliveries = Math.max(1, Math.round(randInt(2, 5) * growth));
     let deliveredThisRun = 0;
 
-    const progressCount = Math.round(randInt(5, 10) * mult);
+    const progressCount = Math.max(1, Math.round(randInt(3, 8) * mult));
     const ordersToProgress = await prisma.deal.findMany({
       where: {
         orderNumber: { not: null },
@@ -157,8 +196,7 @@ export async function POST(request: NextRequest) {
     log.push(`Orders: progressed ${progressed} (${deliveredThisRun} delivered, cap ${maxDeliveries})`);
 
     // ── 2. Progress deal pipeline stages (all runs) ────────────────────
-    // 40-80 progressions/day ÷ 6 runs = 7-13 per run
-    const stageCount = Math.round(randInt(7, 13) * mult);
+    const stageCount = Math.max(1, Math.round(randInt(5, 12) * mult));
     const dealsToConsider = await prisma.deal.findMany({
       where: {
         stage: { in: ["New Opportunity", "Prospecting", "Qualified", "Proposal", "Negotiation"] },
@@ -209,8 +247,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 4. Inventory consumption (all runs) ─────────────────────────────
-    // Simulate parts being used for orders — 3-8 items reduced per run
-    const invCount = Math.round(randInt(3, 8) * mult);
+    const invCount = Math.max(1, Math.round(randInt(2, 6) * mult));
     const invItems = await prisma.inventory.findMany({
       where: { quantityOnHand: { gt: 0 } },
       take: invCount * 3,
@@ -231,9 +268,10 @@ export async function POST(request: NextRequest) {
     log.push(`Inventory: ${adjusted} items reduced`);
 
     // ── 5. Create new orders (creation slots only) ──────────────────────
-    // 15-35 orders/day ÷ 4 slots = 4-9 per slot
+    // Week 1: 5-10/day (1-3/slot), Week 4+: 15-35/day (4-9/slot)
     if (CREATION_SLOTS.includes(run)) {
-      const newOrderCount = Math.round(randInt(4, 9) * mult);
+      const baseCount = growth < 0.5 ? randInt(1, 3) : randInt(4, 9);
+      const newOrderCount = Math.max(1, Math.round(baseCount * slotMultiplier(run)));
 
       // Get customers with Active/Qualified status
       const customers = await prisma.lead.findMany({
@@ -275,7 +313,7 @@ export async function POST(request: NextRequest) {
         for (let i = 0; i < newOrderCount; i++) {
           const cust = pick(customers);
           const rep = pickLeastLoadedRep(reps, repLoads);
-          const value = generateOrderValue();
+          const value = generateOrderValue(growth);
           batchValue += value;
 
           orders.push({
