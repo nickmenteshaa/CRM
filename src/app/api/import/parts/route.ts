@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDirectPrisma } from "@/lib/db-direct";
 import { cookies } from "next/headers";
+import { auditLog } from "@/lib/actions-audit";
 
 // Force Node.js runtime — never Edge
 export const runtime = "nodejs";
@@ -96,6 +97,17 @@ export async function POST(request: NextRequest) {
 
     const elapsed = Math.round(performance.now() - t0);
     console.log(`[IMPORT-API] Parts: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);
+
+    try {
+      const sd = JSON.parse(decodeURIComponent(session.value));
+      await auditLog({
+        action: "import.parts",
+        entity: "Part",
+        userId: sd.id,
+        userName: sd.name,
+        details: { created: totalCreated, skipped: totalSkipped, total: records.length },
+      });
+    } catch { /* audit best effort */ }
 
     return NextResponse.json({
       created: totalCreated,

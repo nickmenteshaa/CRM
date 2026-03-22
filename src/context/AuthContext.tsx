@@ -4,7 +4,6 @@ import { createContext, useContext, useState, useEffect, useCallback, ReactNode 
 import {
   dbGetAllEmployees,
   dbGetAllTeams,
-  dbLoginEmployee,
   dbCreateEmployee,
   dbUpdateEmployee,
   dbDeleteEmployee,
@@ -155,22 +154,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
-  // ── Login (async — validates against DB) ────────────────────────────
+  // ── Auto-logout on inactivity (45 min) ─────────────────────────────
+
+  useEffect(() => {
+    if (!user) return;
+    const TIMEOUT = 45 * 60 * 1000; // 45 minutes
+    let timer: ReturnType<typeof setTimeout>;
+
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        console.log("[Auth] Auto-logout due to inactivity");
+        setSessionCookie(false);
+        setUser(null);
+        window.location.href = "/login?reason=timeout";
+      }, TIMEOUT);
+    };
+
+    const events = ["mousedown", "keydown", "scroll", "touchstart"];
+    events.forEach((e) => window.addEventListener(e, resetTimer));
+    resetTimer();
+
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+    };
+  }, [user]);
+
+  // ── Login (via API route with rate limiting) ──────────────────────
 
   async function login(email: string, password: string): Promise<{ ok: boolean; error?: string }> {
-    const emp = await dbLoginEmployee(email, password);
-    if (!emp) return { ok: false, error: "Invalid email or password" };
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
 
-    const authUser = toAuthUser(emp);
+      if (!res.ok) {
+        return { ok: false, error: data.error || "Login failed" };
+      }
 
-    // Set cookie with full user info BEFORE state update for middleware
-    setSessionCookie(true, authUser);
+      const authUser: AuthUser = {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        role: data.user.role as Role,
+        managerId: data.user.managerId,
+        teamId: data.user.teamId,
+      };
 
-    setUser(authUser);
-    return { ok: true };
+      setSessionCookie(true, authUser);
+      setUser(authUser);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Network error" };
+    }
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch { /* best effort */ }
     setSessionCookie(false);
     setUser(null);
   }

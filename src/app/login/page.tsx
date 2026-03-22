@@ -25,6 +25,8 @@ function LoginForm() {
   const [loading, setLoading]   = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const reason = searchParams.get("reason");
+
   // Already logged in → redirect immediately
   useEffect(() => {
     if (user) router.replace(searchParams.get("from") ?? "/");
@@ -58,6 +60,12 @@ function LoginForm() {
           <h1 className="text-2xl font-bold text-[#F9FAFB]">{companyName}</h1>
           <p className="text-sm text-[#9CA3AF] mt-1">Car Sales Platform — Sign in</p>
         </div>
+
+        {reason === "timeout" && (
+          <div className="mb-4 bg-amber-900/20 border border-amber-700 rounded-lg px-4 py-3 text-sm text-amber-300">
+            Session expired due to inactivity. Please sign in again.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="bg-[#111827] rounded-2xl border border-[#1F2937] shadow-sm shadow-black/10 p-8 space-y-5">
           <div>

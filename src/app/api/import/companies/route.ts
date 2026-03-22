@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDirectPrisma } from "@/lib/db-direct";
 import { cookies } from "next/headers";
+import { auditLog } from "@/lib/actions-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -80,6 +81,15 @@ export async function POST(request: NextRequest) {
 
     const elapsed = Math.round(performance.now() - t0);
     console.log(`[COMPANY-IMPORT-API] Complete: created=${totalCreated}, skipped=${totalSkipped}, time=${elapsed}ms`);
+
+    const sd = JSON.parse(decodeURIComponent(session.value));
+    await auditLog({
+      action: "import.companies",
+      entity: "Company",
+      userId: sd.id,
+      userName: sd.name,
+      details: { created: totalCreated, skipped: totalSkipped, total: records.length, timeMs: elapsed },
+    });
 
     return NextResponse.json({
       created: totalCreated,

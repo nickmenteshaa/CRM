@@ -682,6 +682,10 @@ export async function dbCheckPartDependencies(id: string): Promise<{
 
 export async function dbDeletePart(id: string): Promise<void> {
   await prisma.part.delete({ where: { id } });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "part.deleted", entity: "Part", entityId: id });
+  } catch { /* best effort */ }
 }
 
 // ── CATEGORIES CRUD ──────────────────────────────────────────────────────────
@@ -768,6 +772,10 @@ export async function dbUpdateInventory(id: string, updates: Partial<InventoryIt
 
 export async function dbDeleteInventory(id: string): Promise<void> {
   await prisma.inventory.delete({ where: { id } });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "inventory.deleted", entity: "Inventory", entityId: id });
+  } catch { /* best effort */ }
 }
 
 // ── SUPPLIERS CRUD ───────────────────────────────────────────────────────────
@@ -808,6 +816,10 @@ export async function dbUpdateSupplier(id: string, updates: Partial<Supplier>): 
 
 export async function dbDeleteSupplier(id: string): Promise<void> {
   await prisma.supplier.delete({ where: { id } });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "supplier.deleted", entity: "Supplier", entityId: id });
+  } catch { /* best effort */ }
 }
 
 // ── SUPPLIER PARTS CRUD ──────────────────────────────────────────────────────

@@ -171,6 +171,10 @@ export async function dbUpdateEmployee(
 export async function dbDeleteEmployee(id: string): Promise<{ ok: boolean; error?: string }> {
   try {
     await prisma.employee.delete({ where: { id } });
+    try {
+      const { auditLog } = await import("@/lib/actions-audit");
+      await auditLog({ action: "employee.deleted", entity: "Employee", entityId: id });
+    } catch { /* best effort */ }
     return { ok: true };
   } catch {
     return { ok: false, error: "Failed to delete employee" };

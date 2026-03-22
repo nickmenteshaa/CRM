@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDirectPrisma } from "@/lib/db-direct";
 import { cookies } from "next/headers";
+import { auditLog } from "@/lib/actions-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -155,6 +156,18 @@ export async function POST(request: NextRequest) {
     console.log(`[IMPORT-API] Inventory: created=${totalCreated}, skipped=${totalSkipped}`);
 
     const elapsed = Math.round(performance.now() - t0);
+
+    try {
+      const sd = JSON.parse(decodeURIComponent(session.value));
+      await auditLog({
+        action: "import.inventory",
+        entity: "Inventory",
+        userId: sd.id,
+        userName: sd.name,
+        details: { created: totalCreated, skipped: totalSkipped, total: records.length },
+      });
+    } catch { /* audit best effort */ }
+
     return NextResponse.json({
       created: totalCreated,
       skipped: totalSkipped,

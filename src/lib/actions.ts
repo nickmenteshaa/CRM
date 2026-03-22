@@ -429,7 +429,10 @@ export async function dbUpdateLead(id: string, updates: Partial<Lead>): Promise<
 
 export async function dbDeleteLead(id: string): Promise<void> {
   await prisma.lead.delete({ where: { id } });
-  auditLog({ action: "lead.deleted", entity: "Lead", entityId: id });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "lead.deleted", entity: "Lead", entityId: id });
+  } catch { /* best effort */ }
 }
 
 export async function dbBulkDeleteLeads(ids: string[]): Promise<void> {
@@ -611,6 +614,10 @@ export async function dbUpdateDeal(id: string, updates: Partial<Deal>): Promise<
 
 export async function dbDeleteDeal(id: string): Promise<void> {
   await prisma.deal.delete({ where: { id } });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "deal.deleted", entity: "Deal", entityId: id });
+  } catch { /* best effort */ }
 }
 
 /**
@@ -777,6 +784,10 @@ export async function dbUpdateCompany(id: string, updates: Partial<Company>): Pr
 
 export async function dbDeleteCompany(id: string): Promise<void> {
   await prisma.company.delete({ where: { id } });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({ action: "company.deleted", entity: "Company", entityId: id });
+  } catch { /* best effort */ }
 }
 
 export async function dbBulkDeleteCompanies(ids: string[]): Promise<void> {
@@ -950,6 +961,15 @@ export async function dbSetAppSetting(key: string, value: string): Promise<void>
     create: { key, value },
     update: { value },
   });
+  try {
+    const { auditLog } = await import("@/lib/actions-audit");
+    await auditLog({
+      action: "settings.changed",
+      entity: "AppSetting",
+      entityId: key,
+      details: { key, value },
+    });
+  } catch { /* best effort */ }
 }
 
 export async function dbGetAllAppSettings(): Promise<Record<string, string>> {
