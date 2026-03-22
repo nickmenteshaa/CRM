@@ -387,3 +387,20 @@ model AppSetting {
   value     String
   updatedAt DateTime @updatedAt
 }
+
+// ── Audit Log (immutable, append-only) ───────────────────────────────────────
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String                              // e.g. "order.created", "deal.updated", "import.completed"
+  entity    String                              // e.g. "Deal", "Lead", "Company", "Inventory"
+  entityId  String?                             // ID of affected record (nullable for system events)
+  userId    String?                             // who performed the action
+  userName  String?                             // denormalized for display
+  details   String?                             // JSON string with extra context
+  createdAt DateTime @default(now())
+
+  @@index([entity])
+  @@index([action])
+  @@index([userId])
+  @@index([createdAt])
+}

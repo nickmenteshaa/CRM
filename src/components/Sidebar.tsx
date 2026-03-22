@@ -23,6 +23,7 @@ const nav = [
   { label: "Suppliers", icon: "🏭", href: "/suppliers" },
   { label: "Inventory", icon: "📦", href: "/inventory" },
   { label: "Team Chat", icon: "💬", href: "/chat" },
+  { label: "Audit Log", icon: "📜", href: "/audit" },
 ];
 
 const roleStyles: Record<string, string> = {

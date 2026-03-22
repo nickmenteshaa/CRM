@@ -7,6 +7,7 @@ import { useApp } from "@/context/AppContext";
 import { useAuth, ROLE_LABELS, type Role } from "@/context/AuthContext";
 import { useFontSize, type FontSize } from "@/context/FontSizeContext";
 import { TIMEZONE_OPTIONS } from "@/lib/date-utils";
+import { useTheme, type Theme } from "@/context/ThemeContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -434,10 +435,7 @@ function AppearanceSection() {
     if (typeof window !== "undefined") return localStorage.getItem("crm_accent_color") || "Blue";
     return "Blue";
   });
-  const [sidebarStyle, setSidebarStyle] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("crm_sidebar_style") || "Light";
-    return "Light";
-  });
+  const { theme, setTheme } = useTheme();
   const [search, setSearch] = useState("");
   const { fontSize, setFontSize } = useFontSize();
   const [density, setDensity] = useLayoutDensity();
@@ -531,22 +529,22 @@ function AppearanceSection() {
           </div>
         </div>}
 
-        {/* Sidebar style (restored from original) */}
+        {/* Theme — applies immediately */}
         {visible.includes("Sidebar Style") && <div>
-          <p className="text-sm font-medium text-gray-300 mb-3">Sidebar Style</p>
+          <p className="text-sm font-medium text-gray-300 mb-3">Theme</p>
           <div className="flex gap-3">
-            {["Light", "Dark"].map((s) => (
+            {(["light", "dark"] as Theme[]).map((t) => (
               <button
-                key={s}
-                onClick={() => setSidebarStyle(s)}
+                key={t}
+                onClick={() => setTheme(t)}
                 className={`flex items-center gap-2 px-4 py-2.5 text-sm rounded-xl border transition-colors ${
-                  sidebarStyle === s
+                  theme === t
                     ? "bg-blue-900/20 border-blue-500 text-blue-400 font-medium"
                     : "border-[#1F2937] text-gray-400 hover:bg-[#1F2937]"
                 }`}
               >
-                <span>{s === "Light" ? "☀" : "🌙"}</span>
-                {s}
+                <span>{t === "light" ? "☀" : "🌙"}</span>
+                {t === "light" ? "Light" : "Dark"}
               </button>
             ))}
           </div>
@@ -556,7 +554,6 @@ function AppearanceSection() {
       </div>
       <SaveBar onSave={() => {
         localStorage.setItem("crm_accent_color", accent);
-        localStorage.setItem("crm_sidebar_style", sidebarStyle);
       }} />
     </div>
   );

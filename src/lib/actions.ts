@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/db";
 import type { Lead, Task, Deal, Activity, Company, Message } from "@/context/AppContext";
 import { aiSummarizeActivities, aiNextBestAction, aiSummarizeConversation, aiFollowUpDraft } from "@/lib/ai";
+import { auditLog } from "@/lib/actions-audit";
 
 // ── Mappers: Prisma DateTime → ISO string for our app types ──────────────────
 
@@ -388,6 +389,7 @@ export async function dbCreateLead(
       },
     }),
   ]);
+  auditLog({ action: "lead.created", entity: "Lead", entityId: lead.id, details: { name: lead.name } });
   return { lead: mapLead(lead), task: mapTask(task) };
 }
 
@@ -427,6 +429,7 @@ export async function dbUpdateLead(id: string, updates: Partial<Lead>): Promise<
 
 export async function dbDeleteLead(id: string): Promise<void> {
   await prisma.lead.delete({ where: { id } });
+  auditLog({ action: "lead.deleted", entity: "Lead", entityId: id });
 }
 
 export async function dbBulkDeleteLeads(ids: string[]): Promise<void> {
@@ -566,6 +569,7 @@ export async function dbCreateDeal(data: Omit<Deal, "id">): Promise<Deal> {
       convertedToOrderId: data.convertedToOrderId ?? null,
     },
   });
+  auditLog({ action: "deal.created", entity: "Deal", entityId: row.id, details: { name: row.name, value: row.value, orderNumber: row.orderNumber } });
   return mapDeal(row);
 }
 
@@ -762,6 +766,7 @@ export async function dbGetCompanies(): Promise<Company[]> {
 
 export async function dbCreateCompany(data: Omit<Company, "id">): Promise<Company> {
   const row = await prisma.company.create({ data });
+  auditLog({ action: "company.created", entity: "Company", entityId: row.id, details: { name: row.name } });
   return mapCompany(row);
 }
 
