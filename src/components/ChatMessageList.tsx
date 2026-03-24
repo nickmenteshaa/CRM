@@ -441,10 +441,13 @@ export default function ChatMessageList({ conversation, onBack, onDelete }: Prop
 
   const displaySubtitle = useMemo(() => {
     if (conversation.type === "group") {
+      const count = conversation.members.length;
+      if (count > 8) return `${count} members`;
       const names = conversation.members
-        .map((id) => userMap.get(id)?.name ?? "Unknown")
+        .slice(0, 8)
+        .map((id) => userMap.get(id)?.name?.split(" ")[0] ?? "Unknown")
         .join(", ");
-      return `${conversation.members.length} members: ${names}`;
+      return `${count} members: ${names}`;
     }
     const otherId = conversation.members.find((m) => m !== user?.id);
     if (!otherId) return "";

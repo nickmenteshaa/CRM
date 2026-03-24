@@ -30,18 +30,18 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#070B10]">
+    <div className="flex h-screen overflow-hidden bg-[#070B10]">
       <Sidebar />
-      <main className="flex-1 lg:ml-64 flex">
+      <main className="flex-1 lg:ml-64 flex h-full overflow-hidden">
         {/* Left panel: conversation list */}
-        <div className={`w-full lg:w-80 border-r border-[#1F2937] bg-[#0B0F14] flex-shrink-0 ${
+        <div className={`w-full lg:w-80 border-r border-[#1F2937] bg-[#0B0F14] flex-shrink-0 overflow-y-auto ${
           activeConvo ? "hidden lg:flex lg:flex-col" : "flex flex-col"
         }`}>
           <ChatConversationList onNewChat={() => setNewChatOpen(true)} />
         </div>
 
         {/* Right panel: active conversation or empty state */}
-        <div className={`flex-1 flex flex-col ${
+        <div className={`flex-1 min-w-0 flex flex-col overflow-hidden ${
           activeConvo ? "flex" : "hidden lg:flex"
         }`}>
           {activeConvo ? (
