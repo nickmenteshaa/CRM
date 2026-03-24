@@ -449,8 +449,7 @@ export async function POST(request: NextRequest) {
       const nonAdmins = allEmps.filter((e) => e.role !== "admin");
 
       // ── 9b. Ensure persistent team groups ──────────────────────────────
-      // Sales Team: sales reps + senior reps + managers + admin
-      // Operations Team: everyone (small company, everyone touches ops)
+      // Persistent team groups — created once, reused every run
       const TEAM_GROUPS: { name: string; memberFilter: () => string[] }[] = [
         {
           name: "Sales Team",
@@ -464,6 +463,49 @@ export async function POST(request: NextRequest) {
         },
         {
           name: "Operations Team",
+          memberFilter: () => {
+            const ids = allEmps.map((e) => e.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
+          },
+        },
+        {
+          name: "Management",
+          memberFilter: () => {
+            const ids = allEmps
+              .filter((e) => ["manager", "admin", "senior_rep"].includes(e.role))
+              .map((e) => e.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
+          },
+        },
+        {
+          name: "Logistics & Shipping",
+          memberFilter: () => {
+            // Ops-focused: everyone except pure sales reps
+            const ids = allEmps
+              .filter((e) => ["manager", "admin", "senior_rep"].includes(e.role))
+              .map((e) => e.id);
+            // Also include 3-5 random sales reps (they need shipping updates)
+            const extraReps = salesReps.sort(() => Math.random() - 0.5).slice(0, Math.min(5, salesReps.length));
+            for (const r of extraReps) ids.push(r.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
+          },
+        },
+        {
+          name: "Urgent Orders",
+          memberFilter: () => {
+            // Small group: managers + admin + a few senior reps
+            const ids = managers.map((e) => e.id);
+            const seniors = allEmps.filter((e) => e.role === "senior_rep").slice(0, 3);
+            for (const s of seniors) ids.push(s.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
+          },
+        },
+        {
+          name: "Weekly Standup",
           memberFilter: () => {
             const ids = allEmps.map((e) => e.id);
             if (adminId && !ids.includes(adminId)) ids.push(adminId);
@@ -650,8 +692,74 @@ export async function POST(request: NextRequest) {
         return "Running through the warehouse checklist, updates coming shortly";
       }
 
+      // Messages for extra groups
+      function logisticsMsg(): string {
+        const o = pick(ctxOrders);
+        const inv = pick(ctxLowStock);
+        const templates: string[] = [];
+        if (o) {
+          templates.push(
+            `${o.orderNumber} for ${o.contact} — labels printed, pickup scheduled for today`,
+            `Delivery for ${o.orderNumber} dispatched, tracking shared with ${o.contact}`,
+            `${o.orderNumber} shipment packed and ready, awaiting carrier pickup`,
+            `Shipping update: ${o.orderNumber} (${o.contact}) is ${o.orderStatus}, estimated delivery in 2-3 days`,
+          );
+        }
+        if (inv?.part) {
+          templates.push(
+            `Supplier shipment for ${inv.part.name} (${inv.part.sku}) arrived — restocking now`,
+            `${inv.part.name} restock in transit, expected delivery by end of week`,
+            `Warehouse received ${inv.part.sku}, updating inventory count`,
+          );
+        }
+        return templates.length > 0 ? pick(templates) : "Checking carrier schedules for today's dispatches";
+      }
+
+      function urgentMsg(): string {
+        const o = pick(ctxOrders);
+        const d = pick(ctxDeals);
+        const templates: string[] = [];
+        if (o) {
+          templates.push(
+            `PRIORITY: ${o.orderNumber} for ${o.contact} needs immediate attention — client escalated`,
+            `${o.orderNumber} — customer is waiting, please expedite processing`,
+            `Escalation on ${o.orderNumber}: ${o.contact} called twice today about delivery date`,
+          );
+        }
+        if (d) {
+          templates.push(
+            `${d.contact} threatening to cancel ${d.name} (${d.value}) — need resolution today`,
+            `High-value deal ${d.name} at risk — ${d.contact} wants final pricing by EOD`,
+          );
+        }
+        return templates.length > 0 ? pick(templates) : "Reviewing all escalated items — update coming shortly";
+      }
+
+      function standupMsg(): string {
+        const d = pick(ctxDeals);
+        const o = pick(ctxOrders);
+        const templates: string[] = [
+          "Good morning team, let's run through today's priorities",
+          "Quick update from my side — all pending items on track",
+          "Nothing blocked on my end, moving forward with the scheduled tasks",
+        ];
+        if (d) {
+          templates.push(
+            `Working on ${d.name} today — ${d.contact} meeting at 2 PM`,
+            `${d.name} update: moving to ${d.stage}, should close this week`,
+            `Focusing on ${d.contact}'s account today, big opportunity`,
+          );
+        }
+        if (o) {
+          templates.push(
+            `${o.orderNumber} needs to ship today — on it`,
+            `Following up on ${o.orderNumber} payment with ${o.contact}`,
+          );
+        }
+        return pick(templates);
+      }
+
       function crossTeamMsg(): { body: string; targetGroup: string } {
-        // Sales → Ops or Ops → Sales
         if (Math.random() < 0.5) {
           const inv = pick(ctxLowStock);
           const d = pick(ctxDeals);
@@ -688,7 +796,6 @@ export async function POST(request: NextRequest) {
           }
           return "Need a status update on your active deals — let's sync up today";
         }
-        // sales_rep / senior_rep → manager
         const d = pick(ctxDeals);
         if (d) {
           const pct = pick(["5%", "7%", "8%", "10%"]);
@@ -702,32 +809,152 @@ export async function POST(request: NextRequest) {
         return "Working through my pipeline, will send end-of-day summary";
       }
 
-      // ── 9e. Message volume by slot ─────────────────────────────────────
+      /** Generate a contextual reply to an existing message */
+      function generateReply(originalBody: string, replierRole: string): string {
+        const lower = originalBody.toLowerCase();
+        // Detect message topic and reply accordingly
+        if (lower.includes("stock") || lower.includes("inventory") || lower.includes("sku")) {
+          const inv = pick(ctxLowStock);
+          if (inv?.part) return pick([
+            `Checked — ${inv.part.name} has ${inv.quantityOnHand} units available right now`,
+            `Yes, ${inv.part.sku} is in stock. I'll reserve the units`,
+            `Stock confirmed for that SKU, enough for the order`,
+          ]);
+          return pick(["Checking the warehouse now, will confirm in 10 min", "Let me pull the latest count"]);
+        }
+        if (lower.includes("shipping") || lower.includes("delivery") || lower.includes("dispatch")) {
+          return pick([
+            "Carrier confirmed, pickup is scheduled for this afternoon",
+            "Tracking number has been shared with the customer",
+            "On it — should be dispatched within the hour",
+            "I'll coordinate with the warehouse team now",
+          ]);
+        }
+        if (lower.includes("discount") || lower.includes("pricing") || lower.includes("%")) {
+          if (replierRole === "manager" || replierRole === "admin") {
+            return pick([
+              "Approved — go ahead with that discount, but not more than 10%",
+              "Let's cap it at 7%. Send the revised quote today",
+              "Fine, but make sure we maintain margin on this one",
+            ]);
+          }
+          return pick(["Thanks, sending the updated quote now", "Got it, will revise and send today"]);
+        }
+        if (lower.includes("urgent") || lower.includes("priority") || lower.includes("escalat")) {
+          return pick([
+            "I'm on it — will have an update within the hour",
+            "Taking this one as top priority right now",
+            "Understood, escalating internally. Will update you shortly",
+          ]);
+        }
+        if (lower.includes("order") || lower.includes("ord-")) {
+          const o = pick(ctxOrders);
+          if (o) return pick([
+            `${o.orderNumber} is ${o.orderStatus} — processing as we speak`,
+            `Confirmed, ${o.orderNumber} is moving forward`,
+          ]);
+          return pick(["Processing now, should be done by EOD", "On track, no blockers"]);
+        }
+        // Generic positive replies
+        return pick([
+          "Got it, thanks for the update",
+          "Understood, I'll handle it",
+          "On it — will follow up shortly",
+          "Noted, thanks",
+          "Will take care of this today",
+          "Roger that, keeping you posted",
+          "Thanks for flagging this, working on it now",
+        ]);
+      }
+
+      // ── 9e. AUTO-REPLY to recent admin/user messages ───────────────────
+      // Find messages from admin in the last 6 hours that have no reply after them
+      let repliesCreated = 0;
+      if (adminId) {
+        const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+        const recentAdminMsgs = await prisma.chatMessage.findMany({
+          where: {
+            senderId: adminId,
+            createdAt: { gte: sixHoursAgo },
+          },
+          select: { id: true, conversationId: true, body: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 15,
+        });
+
+        for (const adminMsg of recentAdminMsgs) {
+          // Check if there's already a reply after this message in the same conversation
+          const laterMsg = await prisma.chatMessage.findFirst({
+            where: {
+              conversationId: adminMsg.conversationId,
+              senderId: { not: adminId },
+              createdAt: { gt: adminMsg.createdAt },
+            },
+            select: { id: true },
+          });
+          if (laterMsg) continue; // already replied
+
+          // Pick a non-admin member of this conversation to reply
+          const conv = await prisma.chatConversation.findUnique({
+            where: { id: adminMsg.conversationId },
+            select: { members: true, type: true },
+          });
+          if (!conv) continue;
+
+          const memberIds = JSON.parse(conv.members) as string[];
+          const replierCandidates = allEmps.filter(
+            (e) => e.id !== adminId && memberIds.includes(e.id),
+          );
+          if (replierCandidates.length === 0) continue;
+
+          // 70% chance to reply per unanswered message (realistic — not everyone replies instantly)
+          if (Math.random() > 0.7) continue;
+
+          const replier = pick(replierCandidates);
+          const replyBody = generateReply(adminMsg.body, replier.role);
+
+          await prisma.chatMessage.create({
+            data: {
+              conversationId: adminMsg.conversationId,
+              senderId: replier.id,
+              senderName: replier.name,
+              senderRole: replier.role,
+              body: replyBody,
+              replyToId: adminMsg.id,
+            },
+          });
+          repliesCreated++;
+          msgsCreated++;
+        }
+        if (repliesCreated > 0) log.push(`Chat: ${repliesCreated} replies to admin messages`);
+      }
+
+      // ── 9f. Message volume by slot ─────────────────────────────────────
       const slotGroupCount: Record<RunSlot, [number, number]> = {
-        "morning": [2, 3], "mid-morning": [1, 2], "midday": [1, 2],
-        "early-afternoon": [2, 3], "late-afternoon": [1, 2], "eod": [1, 2],
+        "morning": [3, 5], "mid-morning": [2, 4], "midday": [2, 3],
+        "early-afternoon": [3, 5], "late-afternoon": [2, 3], "eod": [2, 3],
       };
       const slotDmCount: Record<RunSlot, [number, number]> = {
-        "morning": [1, 2], "mid-morning": [1, 2], "midday": [0, 1],
-        "early-afternoon": [1, 2], "late-afternoon": [0, 1], "eod": [1, 2],
+        "morning": [2, 4], "mid-morning": [2, 3], "midday": [1, 2],
+        "early-afternoon": [2, 4], "late-afternoon": [1, 2], "eod": [1, 3],
       };
 
       const [grpMin, grpMax] = slotGroupCount[run];
       const [dmMin, dmMax] = slotDmCount[run];
-      const targetGroupMsgs = Math.max(1, Math.round(randInt(grpMin, grpMax) * growth));
-      const targetDmMsgs = Math.round(randInt(dmMin, dmMax) * growth);
+      const targetGroupMsgs = Math.max(2, Math.round(randInt(grpMin, grpMax) * growth));
+      const targetDmMsgs = Math.max(1, Math.round(randInt(dmMin, dmMax) * growth));
 
-      // ── 9f. Generate group messages ────────────────────────────────────
-      // Split between Sales, Ops, and occasional cross-team
-      const usedBodies = new Set<string>(); // deduplicate within this run
+      // ── 9g. Generate group messages across ALL groups ──────────────────
+      const usedBodies = new Set<string>();
+      const groupNames = Object.keys(teamConvs);
 
       for (let i = 0; i < targetGroupMsgs; i++) {
-        // 20% chance of cross-team message
-        const isCross = i > 0 && Math.random() < 0.2;
-
         let convId: string;
         let body: string;
         let senderPool: typeof allEmps;
+
+        // 15% chance of cross-team message
+        const isCross = i > 0 && Math.random() < 0.15;
 
         if (isCross) {
           const ct = crossTeamMsg();
@@ -736,22 +963,52 @@ export async function POST(request: NextRequest) {
           senderPool = ct.targetGroup === "Sales Team"
             ? allEmps.filter((e) => !["sales_rep", "senior_rep"].includes(e.role))
             : salesReps.length > 0 ? salesReps : nonAdmins;
-        } else if (i % 2 === 0 && teamConvs["Sales Team"]) {
-          body = salesGroupMsg();
-          convId = teamConvs["Sales Team"];
-          senderPool = salesReps.length > 0 ? [...salesReps, ...managers] : nonAdmins;
         } else {
-          body = opsGroupMsg();
-          convId = teamConvs["Operations Team"] ?? teamConvs["Sales Team"];
-          senderPool = nonAdmins.length > 0 ? nonAdmins : allEmps;
+          // Rotate through all groups
+          const groupName = groupNames[i % groupNames.length];
+          convId = teamConvs[groupName];
+
+          switch (groupName) {
+            case "Sales Team":
+              body = salesGroupMsg();
+              senderPool = salesReps.length > 0 ? [...salesReps, ...managers] : nonAdmins;
+              break;
+            case "Operations Team":
+              body = opsGroupMsg();
+              senderPool = nonAdmins.length > 0 ? nonAdmins : allEmps;
+              break;
+            case "Logistics & Shipping":
+              body = logisticsMsg();
+              senderPool = nonAdmins.length > 0 ? nonAdmins : allEmps;
+              break;
+            case "Urgent Orders":
+              body = urgentMsg();
+              senderPool = managers.length > 0 ? managers : allEmps;
+              break;
+            case "Weekly Standup":
+              body = standupMsg();
+              senderPool = allEmps;
+              break;
+            case "Management":
+              body = pick([
+                ...ctxDeals.slice(0, 3).map((d) => `Pipeline review: ${d.name} (${d.value}) at ${d.stage} — ${d.contact}`),
+                "Let's ensure all Q1 targets are on track this week",
+                "Team performance looking strong, keep pushing on open proposals",
+                "Reminder: weekly report due by EOD Friday",
+              ]);
+              senderPool = managers;
+              break;
+            default:
+              body = salesGroupMsg();
+              senderPool = allEmps;
+          }
         }
 
-        // Skip duplicate messages within the same run
-        if (usedBodies.has(body)) continue;
+        if (!convId || usedBodies.has(body)) continue;
         usedBodies.add(body);
 
         const sender = pick(senderPool) ?? allEmps[0];
-        if (!sender || !convId) continue;
+        if (!sender) continue;
 
         await prisma.chatMessage.create({
           data: {
@@ -765,8 +1022,7 @@ export async function POST(request: NextRequest) {
         msgsCreated++;
       }
 
-      // ── 9g. Generate private DM messages ───────────────────────────────
-      // Find or create DM conversations with efficient lookup
+      // ── 9h. Generate private DM messages ───────────────────────────────
       const existingDms = await prisma.chatConversation.findMany({
         where: { type: "direct" },
         select: { id: true, members: true },
@@ -775,21 +1031,17 @@ export async function POST(request: NextRequest) {
       });
 
       for (let i = 0; i < targetDmMsgs; i++) {
-        // Pick realistic sender → receiver pairs
         let sender: typeof allEmps[0];
         let receiver: typeof allEmps[0];
 
         const pairType = Math.random();
         if (pairType < 0.4 && managers.length > 0 && salesReps.length > 0) {
-          // Manager → rep
           sender = pick(managers);
           receiver = pick(salesReps);
         } else if (pairType < 0.7 && salesReps.length > 0 && managers.length > 0) {
-          // Rep → manager
           sender = pick(salesReps);
           receiver = pick(managers);
         } else if (nonAdmins.length >= 2) {
-          // Rep → rep (cross-team)
           sender = pick(nonAdmins);
           receiver = pick(nonAdmins.filter((e) => e.id !== sender.id));
         } else {
@@ -797,7 +1049,6 @@ export async function POST(request: NextRequest) {
         }
         if (!sender || !receiver || sender.id === receiver.id) continue;
 
-        // Find existing DM
         let convId: string | undefined;
         for (const c of existingDms) {
           try {
@@ -839,7 +1090,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (groupsCreated > 0) log.push(`Chat: created ${groupsCreated} team groups`);
-      log.push(`Chat: ${msgsCreated} messages sent (${targetGroupMsgs} group + ${targetDmMsgs} DM target)`);
+      log.push(`Chat: ${msgsCreated} messages (${targetGroupMsgs} group + ${targetDmMsgs} DM + ${repliesCreated} replies)`);
     }
 
     // ── Audit log: record this automation run with full metrics ────────
