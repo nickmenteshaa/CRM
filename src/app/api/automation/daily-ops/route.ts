@@ -809,61 +809,154 @@ export async function POST(request: NextRequest) {
         return "Working through my pipeline, will send end-of-day summary";
       }
 
-      /** Generate a contextual reply to an existing message */
-      function generateReply(originalBody: string, replierRole: string): string {
+      /** Generate a logical, contextual reply to an existing message */
+      function generateReply(originalBody: string, replierRole: string, replierName: string): string {
         const lower = originalBody.toLowerCase();
-        // Detect message topic and reply accordingly
-        if (lower.includes("stock") || lower.includes("inventory") || lower.includes("sku")) {
+
+        // ── Stock / inventory questions ──────────────────────────────────
+        if (lower.includes("stock") || lower.includes("inventory") || lower.includes("sku") || lower.includes("availability") || lower.includes("how many")) {
           const inv = pick(ctxLowStock);
           if (inv?.part) return pick([
-            `Checked — ${inv.part.name} has ${inv.quantityOnHand} units available right now`,
-            `Yes, ${inv.part.sku} is in stock. I'll reserve the units`,
-            `Stock confirmed for that SKU, enough for the order`,
+            `Just checked — ${inv.part.name} (${inv.part.sku}) has ${inv.quantityOnHand} units on hand`,
+            `${inv.part.sku} shows ${inv.quantityOnHand} units. ${inv.quantityOnHand <= 5 ? "That's below reorder — I'm placing a PO now" : "Should be enough for this order"}`,
+            `Pulled the count: ${inv.part.name} at ${inv.quantityOnHand} units. Want me to reserve some?`,
           ]);
-          return pick(["Checking the warehouse now, will confirm in 10 min", "Let me pull the latest count"]);
+          return pick(["Checking warehouse now, I'll have the exact count in a few minutes", "Let me pull the latest inventory report and get back to you"]);
         }
-        if (lower.includes("shipping") || lower.includes("delivery") || lower.includes("dispatch")) {
-          return pick([
-            "Carrier confirmed, pickup is scheduled for this afternoon",
-            "Tracking number has been shared with the customer",
-            "On it — should be dispatched within the hour",
-            "I'll coordinate with the warehouse team now",
-          ]);
-        }
-        if (lower.includes("discount") || lower.includes("pricing") || lower.includes("%")) {
-          if (replierRole === "manager" || replierRole === "admin") {
-            return pick([
-              "Approved — go ahead with that discount, but not more than 10%",
-              "Let's cap it at 7%. Send the revised quote today",
-              "Fine, but make sure we maintain margin on this one",
-            ]);
-          }
-          return pick(["Thanks, sending the updated quote now", "Got it, will revise and send today"]);
-        }
-        if (lower.includes("urgent") || lower.includes("priority") || lower.includes("escalat")) {
-          return pick([
-            "I'm on it — will have an update within the hour",
-            "Taking this one as top priority right now",
-            "Understood, escalating internally. Will update you shortly",
-          ]);
-        }
-        if (lower.includes("order") || lower.includes("ord-")) {
+
+        // ── Shipping / delivery / dispatch ──────────────────────────────
+        if (lower.includes("shipping") || lower.includes("delivery") || lower.includes("dispatch") || lower.includes("tracking") || lower.includes("ship")) {
           const o = pick(ctxOrders);
           if (o) return pick([
-            `${o.orderNumber} is ${o.orderStatus} — processing as we speak`,
-            `Confirmed, ${o.orderNumber} is moving forward`,
+            `${o.orderNumber} is packed — carrier pickup is this afternoon, I'll share tracking once it's scanned`,
+            `Already dispatched ${o.orderNumber}. Tracking sent to ${o.contact} via email`,
+            `Coordinating with the warehouse on ${o.orderNumber} — should be out the door by 3 PM`,
           ]);
-          return pick(["Processing now, should be done by EOD", "On track, no blockers"]);
+          return pick([
+            "Carrier confirmed pickup for today's batch, all on schedule",
+            "I'll coordinate with logistics and send you the tracking numbers within the hour",
+          ]);
         }
-        // Generic positive replies
+
+        // ── Discount / pricing requests ─────────────────────────────────
+        if (lower.includes("discount") || lower.includes("pricing") || lower.includes("%") || lower.includes("price")) {
+          if (replierRole === "manager" || replierRole === "admin") {
+            const d = pick(ctxDeals);
+            if (d) return pick([
+              `Approved up to 8% on ${d.name}. Make sure we keep at least 15% margin`,
+              `Go ahead with the discount for ${d.contact}, but no more than 10%. Let's close this one`,
+              `I reviewed ${d.name} — we can offer 7% max. Send the revised quote today`,
+            ]);
+            return "Approved within standard range. Send the updated quote and let me know when they sign";
+          }
+          return pick([
+            "Thanks for the approval, sending the revised quote now",
+            "Got it, I'll update the quote and have it over to the client within the hour",
+            "Perfect, revising the pricing and sending to the customer right away",
+          ]);
+        }
+
+        // ── Urgent / escalation ─────────────────────────────────────────
+        if (lower.includes("urgent") || lower.includes("priority") || lower.includes("escalat") || lower.includes("asap") || lower.includes("immediately")) {
+          const o = pick(ctxOrders);
+          if (o) return pick([
+            `On it — ${o.orderNumber} is my top priority now. I'll have an update in 30 minutes`,
+            `Escalating ${o.orderNumber} with the warehouse team right now. Will confirm status shortly`,
+          ]);
+          return pick([
+            "Dropping everything else to focus on this. I'll update you within the hour",
+            "Understood, making this my #1 priority. Reaching out to the relevant team now",
+            "Taking immediate action on this. Will keep you posted on progress",
+          ]);
+        }
+
+        // ── Order-related (ORD- numbers, order status) ──────────────────
+        if (lower.includes("order") || lower.includes("ord-") || lower.includes("confirm")) {
+          const o = pick(ctxOrders);
+          if (o) return pick([
+            `${o.orderNumber} is currently ${o.orderStatus}. ${o.orderStatus === "New" ? "I'm processing it now" : "Moving to next stage today"}`,
+            `Checked — ${o.orderNumber} for ${o.contact} is ${o.orderStatus}. On track, no issues`,
+            `${o.orderNumber} update: ${o.orderStatus}. ${o.contact} has been notified. Anything else needed?`,
+          ]);
+          return pick(["All pending orders are on track, processing them now", "Confirmed — working through the queue, should be done by EOD"]);
+        }
+
+        // ── Deal / pipeline / close / proposal ──────────────────────────
+        if (lower.includes("deal") || lower.includes("pipeline") || lower.includes("proposal") || lower.includes("close") || lower.includes("prospect")) {
+          const d = pick(ctxDeals);
+          if (d) return pick([
+            `${d.name} is at ${d.stage} — ${d.contact} is engaged, I'm scheduling a follow-up call`,
+            `Working on ${d.name} (${d.value}). ${d.contact} wants the proposal by Wednesday`,
+            `Good news on ${d.name}: ${d.contact} is moving forward, should close this week`,
+          ]);
+          return pick(["Pipeline is looking healthy, I'll send a detailed update in today's standup", "Reviewing all active proposals now, will share status by EOD"]);
+        }
+
+        // ── Customer / client related ───────────────────────────────────
+        if (lower.includes("customer") || lower.includes("client") || lower.includes("called") || lower.includes("meeting") || lower.includes("follow")) {
+          const l = pick(ctxLeads);
+          if (l) return pick([
+            `Just spoke with ${l.name} — they're interested, scheduling a follow-up for tomorrow`,
+            `${l.name} confirmed they want to proceed. I'm preparing the paperwork`,
+          ]);
+          return pick([
+            "I'll reach out to the client today and report back",
+            "Setting up the call now, will share notes after",
+            "Following up with them right away, thanks for the heads up",
+          ]);
+        }
+
+        // ── Questions (how, what, when, can, do we) ─────────────────────
+        if (lower.includes("?") || lower.startsWith("how") || lower.startsWith("what") || lower.startsWith("when") || lower.startsWith("can") || lower.startsWith("do we")) {
+          const d = pick(ctxDeals);
+          const o = pick(ctxOrders);
+          if (d && o) return pick([
+            `From what I see, ${d.name} is at ${d.stage} and ${o.orderNumber} is ${o.orderStatus}. Want me to dig deeper?`,
+            `Let me check and get back to you with the details in a few minutes`,
+          ]);
+          return pick([
+            "Good question — let me look into it and get back to you shortly",
+            "I'll check and have an answer for you within the hour",
+            "Let me pull the latest data on this and circle back",
+          ]);
+        }
+
+        // ── Greetings / general ─────────────────────────────────────────
+        if (lower.includes("hello") || lower.includes("hi") || lower.includes("hey") || lower.includes("good morning") || lower.includes("morning")) {
+          return pick([
+            `Hey! All good on my end, working through the queue`,
+            `Morning! Already started on today's tasks, will update you shortly`,
+            `Hi! Everything is on track so far today`,
+          ]);
+        }
+
+        // ── Positive acknowledgment of updates ──────────────────────────
+        if (lower.includes("update") || lower.includes("status") || lower.includes("progress")) {
+          const d = pick(ctxDeals);
+          if (d) return `${d.name}: ${d.stage}, ${d.contact} is responsive. ${d.value} expected value. I'm pushing to close this week`;
+          return pick([
+            "All tasks on schedule. I'll send a detailed update by end of day",
+            "Everything is moving forward, no blockers. Will share specifics in the standup",
+          ]);
+        }
+
+        // ── Contextual fallback — use real data to sound natural ────────
+        const d = pick(ctxDeals);
+        const o = pick(ctxOrders);
+        if (d) return pick([
+          `Understood. By the way, ${d.name} (${d.contact}) is progressing well — at ${d.stage} now`,
+          `Got it, thanks. Quick update on my side: ${d.contact}'s deal is moving to ${d.stage}`,
+          `Noted. Also wanted to flag that ${d.name} needs attention this week — ${d.contact} is waiting on our proposal`,
+        ]);
+        if (o) return pick([
+          `Got it. Also, ${o.orderNumber} for ${o.contact} is ${o.orderStatus} — on track`,
+          `Will do. FYI, ${o.orderNumber} should be shipped today`,
+        ]);
         return pick([
-          "Got it, thanks for the update",
-          "Understood, I'll handle it",
-          "On it — will follow up shortly",
-          "Noted, thanks",
-          "Will take care of this today",
-          "Roger that, keeping you posted",
-          "Thanks for flagging this, working on it now",
+          "Understood, I'll take care of it",
+          "Thanks for letting me know, working on it now",
+          "On it — will keep you posted",
+          "Got it, will handle this today and report back",
         ]);
       }
 
@@ -911,7 +1004,7 @@ export async function POST(request: NextRequest) {
           if (Math.random() > 0.7) continue;
 
           const replier = pick(replierCandidates);
-          const replyBody = generateReply(adminMsg.body, replier.role);
+          const replyBody = generateReply(adminMsg.body, replier.role, replier.name);
 
           await prisma.chatMessage.create({
             data: {

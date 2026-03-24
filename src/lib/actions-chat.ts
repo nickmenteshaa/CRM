@@ -187,6 +187,7 @@ function canUserAccessConversation(userId: string, members: string[]): boolean {
 export async function dbGetConversations(
   userId: string
 ): Promise<ChatConversation[]> {
+  // Single query: get all conversations with their latest message
   const allConvos = await prisma.chatConversation.findMany({
     orderBy: { updatedAt: "desc" },
     include: {
@@ -197,34 +198,38 @@ export async function dbGetConversations(
     },
   });
 
-  const result: ChatConversation[] = [];
-
-  for (const c of allConvos) {
+  // Filter to conversations the user belongs to
+  const userConvos = allConvos.filter((c) => {
     const members = parseJsonArray(c.members);
-    if (!members.includes(userId)) continue;
+    return members.includes(userId);
+  });
 
+  if (userConvos.length === 0) return [];
+
+  // Single batch query: get unread counts for ALL user conversations at once
+  // Instead of N separate queries, use one raw SQL query
+  const convoIds = userConvos.map((c) => c.id);
+  const unreadCounts = await prisma.$queryRaw<{ conversationId: string; unread: number }[]>`
+    SELECT "conversationId", COUNT(*)::int as unread
+    FROM "ChatMessage"
+    WHERE "conversationId" = ANY(${convoIds})
+      AND "senderId" != ${userId}
+      AND NOT ("readBy"::text LIKE ${"%" + userId + "%"})
+    GROUP BY "conversationId"
+  `;
+  const unreadMap = new Map<string, number>();
+  for (const row of unreadCounts) {
+    unreadMap.set(row.conversationId, row.unread);
+  }
+
+  return userConvos.map((c) => {
     const convo = mapConversation(c);
-
-    // Last message
     if (c.messages.length > 0) {
       convo.lastMessage = mapMessage(c.messages[0]);
     }
-
-    // Unread count: messages not read by this user and not sent by this user
-    const allMessages = await prisma.chatMessage.findMany({
-      where: { conversationId: c.id },
-      select: { readBy: true, senderId: true },
-    });
-    convo.unreadCount = allMessages.filter((m) => {
-      if (m.senderId === userId) return false;
-      const readByArr = parseJsonArray(m.readBy);
-      return !readByArr.includes(userId);
-    }).length;
-
-    result.push(convo);
-  }
-
-  return result;
+    convo.unreadCount = unreadMap.get(c.id) ?? 0;
+    return convo;
+  });
 }
 
 /**

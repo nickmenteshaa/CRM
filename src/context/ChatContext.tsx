@@ -150,16 +150,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const openConversation = useCallback(async (id: string) => {
     if (!user) return;
+    // Instant: switch conversation ID and clear old messages immediately
     setActiveConversationId(id);
+    setActiveMessages([]);
+    // Optimistic: clear unread count right away
+    setConversations((prev) =>
+      prev.map((c) => c.id === id ? { ...c, unreadCount: 0 } : c)
+    );
+    // Load messages and mark read in parallel
     try {
-      const msgs = await dbGetChatMessages(id, user.id);
+      const [msgs] = await Promise.all([
+        dbGetChatMessages(id, user.id),
+        dbMarkConversationRead(id, user.id),
+      ]);
       setActiveMessages(msgs);
-      // Mark as read
-      await dbMarkConversationRead(id, user.id);
-      // Update local unread count
-      setConversations((prev) =>
-        prev.map((c) => c.id === id ? { ...c, unreadCount: 0 } : c)
-      );
     } catch {
       setActiveMessages([]);
     }
@@ -200,20 +204,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const sendMessage = useCallback(async (body: string, attachment?: { name: string; type: string; size: number; data: string }, replyToId?: string) => {
     if (!user || !activeConversationId) return;
-    // Must have either body or attachment
     if (!body.trim() && !attachment) return;
+
+    const trimmedBody = body.trim();
+
+    // Optimistic: show message instantly before server confirms
+    const optimisticId = `optimistic-${Date.now()}`;
+    const optimisticMsg: ChatMessage = {
+      id: optimisticId,
+      conversationId: activeConversationId,
+      senderId: user.id,
+      senderName: user.name,
+      senderRole: user.role,
+      body: trimmedBody,
+      readBy: [user.id],
+      createdAt: new Date().toISOString(),
+      reactions: [],
+      ...(attachment ? { attachment: { name: attachment.name, type: attachment.type, size: attachment.size } } : {}),
+    };
+    setActiveMessages((prev) => [...prev, optimisticMsg]);
+    setConversations((prev) =>
+      prev.map((c) => c.id === activeConversationId
+        ? { ...c, lastMessage: optimisticMsg, updatedAt: optimisticMsg.createdAt }
+        : c
+      ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    );
+
+    // Server call in background
     const msg = await dbSendChatMessage(
       activeConversationId,
       user.id,
       user.name,
       user.role,
-      body.trim(),
+      trimmedBody,
       attachment,
       replyToId
     );
     if (msg) {
-      setActiveMessages((prev) => [...prev, msg]);
-      // Update last message in conversation list
+      // Replace optimistic with real message
+      setActiveMessages((prev) => prev.map((m) => m.id === optimisticId ? msg : m));
       setConversations((prev) =>
         prev.map((c) => c.id === activeConversationId
           ? { ...c, lastMessage: msg, updatedAt: msg.createdAt }
