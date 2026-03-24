@@ -89,6 +89,20 @@ html[data-theme="light"] [class*="text-[#F9FAFB]"] { color: #1E293B !important; 
 html[data-theme="light"] [class*="text-[#9CA3AF]"] { color: #64748B !important; }
 html[data-theme="light"] [class*="divide-[#1F2937]"] > :not([hidden]) ~ :not([hidden]) { border-color: #E2E8F0 !important; }
 
+/* Chat-specific light overrides (message list, emoji picker, input area) */
+html[data-theme="light"] .bg-\[\#1F2937\] { background-color: #E2E8F0 !important; }
+html[data-theme="light"] .bg-\[\#2D3748\] { background-color: #CBD5E1 !important; }
+html[data-theme="light"] .border-\[\#2D3748\] { border-color: #CBD5E1 !important; }
+html[data-theme="light"] .text-gray-600 { color: #64748B !important; }
+html[data-theme="light"] .text-gray-200 { color: #334155 !important; }
+html[data-theme="light"] .placeholder-gray-500::placeholder { color: #94A3B8 !important; }
+html[data-theme="light"] .hover\:text-gray-300:hover { color: #334155 !important; }
+html[data-theme="light"] .hover\:text-gray-200:hover { color: #1E293B !important; }
+html[data-theme="light"] .hover\:bg-\[\#1F2937\]:hover { background-color: #E2E8F0 !important; }
+html[data-theme="light"] .hover\:bg-\[\#1F2937\]\/50:hover { background-color: rgba(226,232,240,0.5) !important; }
+html[data-theme="light"] .bg-\[\#0B0F14\]\/60 { background-color: rgba(248,250,252,0.6) !important; }
+html[data-theme="light"] .border-\[\#1F2937\]\/50 { border-color: rgba(226,232,240,0.5) !important; }
+
 /* Font size switching */
 html[data-font-size="small"] body { font-size: 13px; }
 html[data-font-size="medium"] body { font-size: 15px; }
