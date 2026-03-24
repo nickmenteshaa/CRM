@@ -91,10 +91,12 @@ export function isIpAllowed(clientIp: string): boolean {
 const SENSITIVE_PATHS = [
   "/settings",
   "/api/import",
-  "/api/automation",
   "/api/seed",
   "/audit",
 ];
+// NOTE: /api/automation is intentionally NOT in this list.
+// It has its own auth via x-automation-key header — IP-blocking it
+// prevents Vercel Cron and external schedulers from reaching it.
 
 /** Check if a path is sensitive */
 export function isSensitivePath(pathname: string): boolean {

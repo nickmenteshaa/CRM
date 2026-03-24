@@ -151,6 +151,12 @@ export async function POST(request: NextRequest) {
   // Before start date → do nothing except inventory adjustments
   if (growth <= 0) {
     log.push("System not yet started (before START_DATE)");
+    await auditLog({
+      action: `automation.${run}.skipped`,
+      entity: "System",
+      userName: "Automation",
+      details: { run, reason: "Before START_DATE", growth: 0, timestamp: new Date().toISOString() },
+    });
     return NextResponse.json({ run, timestamp: new Date().toISOString(), log, timeMs: 0 });
   }
 
@@ -427,124 +433,383 @@ export async function POST(request: NextRequest) {
       log.push("EOD summary generated");
     }
 
-    // ── 9. Employee chat generation (context-aware) ───────────────────
+    // ── 9. Employee chat generation (context-aware, persistent groups) ─
     if (growth > 0) {
+      let msgsCreated = 0;
+      let groupsCreated = 0;
+
+      // ── 9a. Fetch employees ────────────────────────────────────────────
       const allEmps = await prisma.employee.findMany({
         where: { isActive: true },
         select: { id: true, name: true, role: true },
       });
-      const admins = allEmps.filter((e) => e.role === "admin");
-      const adminId = admins[0]?.id; // primary admin — auto-included in all chats
+      const adminId = allEmps.find((e) => e.role === "admin")?.id;
       const managers = allEmps.filter((e) => e.role === "manager" || e.role === "admin");
-      const salesReps = allEmps.filter((e) => e.role === "sales_rep");
+      const salesReps = allEmps.filter((e) => e.role === "sales_rep" || e.role === "senior_rep");
+      const nonAdmins = allEmps.filter((e) => e.role !== "admin");
 
-      // Message templates by context
-      const salesMessages = [
-        "Just closed the order, customer confirmed via email",
-        "Following up with the distributor, they need updated pricing",
-        "New inquiry came in, adding to pipeline",
-        "Customer wants expedited shipping, checking with warehouse",
-        "Quote sent, waiting for approval",
-        "Good call with the buyer, they're interested in bulk order",
-        "Need to check stock for this SKU before confirming",
-        "Customer asked about payment terms, forwarding to accounts",
-      ];
-      const warehouseMessages = [
-        "Stock checked, we have enough for this order",
-        "Running low on a few items, flagging for reorder",
-        "Shipment packed and ready for dispatch",
-        "Delivery scheduled for tomorrow morning",
-        "Received stock update from supplier",
-        "Inventory count completed for section B",
-      ];
-      const managerMessages = [
-        "Let's review the pipeline in today's standup",
-        "Good progress team, keep pushing on the open quotes",
-        "Prioritize the large distributor accounts this week",
-        "Make sure all pending orders are confirmed by EOD",
-        "Need status update on the delayed shipments",
-        "Weekly target looking good, let's maintain the pace",
-      ];
-
-      const msgCount = Math.max(2, Math.round(randInt(5, 15) * mult));
-      let msgsCreated = 0;
-
-      // Create group chat if triggered by events (1-3/day, only on certain slots)
-      const shouldCreateGroup = ["morning", "midday"].includes(run) && Math.random() < 0.4 * growth;
-      if (shouldCreateGroup && progressed > 0 && managers.length > 0 && salesReps.length > 0) {
-        // Pick a contextual group reason
-        const groupTypes = [
-          { name: `Weekly Sales Push ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`, reason: "sales coordination" },
-          { name: `Order Follow-up Batch`, reason: "order handling" },
-          { name: `Stock Review ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`, reason: "inventory check" },
-        ];
-
-        // Add event-specific groups
-        if (deliveredThisRun > 2) {
-          groupTypes.push({ name: `Delivery Batch Confirmation`, reason: "delivery update" });
-        }
-
-        const gt = pick(groupTypes);
-        const groupMembers = [
-          ...(adminId ? [adminId] : []), // admin always included
-          pick(managers).id,
-          ...salesReps.sort(() => Math.random() - 0.5).slice(0, randInt(2, 4)).map((r) => r.id),
-        ];
-        const uniqueMembers = [...new Set(groupMembers)];
-
-        const conv = await prisma.chatConversation.create({
-          data: {
-            type: "group",
-            name: gt.name,
-            createdBy: uniqueMembers[0],
-            members: JSON.stringify(uniqueMembers),
+      // ── 9b. Ensure persistent team groups ──────────────────────────────
+      // Sales Team: sales reps + senior reps + managers + admin
+      // Operations Team: everyone (small company, everyone touches ops)
+      const TEAM_GROUPS: { name: string; memberFilter: () => string[] }[] = [
+        {
+          name: "Sales Team",
+          memberFilter: () => {
+            const ids = allEmps
+              .filter((e) => ["sales_rep", "senior_rep", "manager", "admin"].includes(e.role))
+              .map((e) => e.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
           },
+        },
+        {
+          name: "Operations Team",
+          memberFilter: () => {
+            const ids = allEmps.map((e) => e.id);
+            if (adminId && !ids.includes(adminId)) ids.push(adminId);
+            return [...new Set(ids)];
+          },
+        },
+      ];
+
+      const teamConvs: Record<string, string> = {}; // name → conversationId
+
+      for (const tg of TEAM_GROUPS) {
+        // Find existing group by exact stable name
+        const existing = await prisma.chatConversation.findFirst({
+          where: { type: "group", name: tg.name },
+          select: { id: true, members: true },
         });
 
-        // Seed 2-4 messages in the new group
-        const groupMsgCount = randInt(2, 4);
-        for (let i = 0; i < groupMsgCount; i++) {
-          const sender = pick(allEmps.filter((e) => uniqueMembers.includes(e.id)));
-          const msgs = sender.role === "manager" || sender.role === "admin" ? managerMessages : salesMessages;
-          await prisma.chatMessage.create({
+        if (existing) {
+          teamConvs[tg.name] = existing.id;
+          // Sync members if new employees were added
+          const currentMembers = JSON.parse(existing.members) as string[];
+          const expected = tg.memberFilter();
+          const merged = [...new Set([...currentMembers, ...expected])];
+          if (merged.length > currentMembers.length) {
+            await prisma.chatConversation.update({
+              where: { id: existing.id },
+              data: { members: JSON.stringify(merged) },
+            });
+          }
+        } else {
+          const members = tg.memberFilter();
+          const conv = await prisma.chatConversation.create({
             data: {
-              conversationId: conv.id,
-              senderId: sender.id,
-              senderName: sender.name,
-              senderRole: sender.role,
-              body: pick(msgs),
+              type: "group",
+              name: tg.name,
+              createdBy: adminId ?? members[0],
+              members: JSON.stringify(members),
             },
           });
-          msgsCreated++;
+          teamConvs[tg.name] = conv.id;
+          groupsCreated++;
         }
-        log.push(`Chat: created group "${gt.name}" (${uniqueMembers.length} members, ${groupMsgCount} msgs)`);
       }
 
-      // Private messages between reps and managers
-      const privateMsgCount = Math.max(1, msgCount - msgsCreated);
-      for (let i = 0; i < privateMsgCount; i++) {
-        const sender = pick(allEmps);
-        const receiver = pick(allEmps.filter((e) => e.id !== sender.id));
-        if (!receiver) continue;
-
-        // Find or create DM conversation
-        const existingConvs = await prisma.chatConversation.findMany({
-          where: { type: "direct" },
-          select: { id: true, members: true },
-          take: 50,
+      // ── 9c. Fetch context data for realistic messages ──────────────────
+      const [ctxDeals, ctxOrders, ctxLowStock, ctxLeads] = await Promise.all([
+        prisma.deal.findMany({
+          where: { won: false, lost: false, stage: { not: "Closed Lost" } },
+          take: 25,
           orderBy: { updatedAt: "desc" },
-        });
+          select: { name: true, contact: true, value: true, stage: true, owner: true, ownerId: true },
+        }),
+        prisma.deal.findMany({
+          where: { orderNumber: { not: null }, orderStatus: { in: ["New", "Confirmed", "Paid", "Shipped"] } },
+          take: 15,
+          orderBy: { updatedAt: "desc" },
+          select: { name: true, contact: true, orderNumber: true, orderStatus: true, value: true, owner: true },
+        }),
+        prisma.inventory.findMany({
+          where: { quantityOnHand: { lte: 15 } },
+          include: { part: { select: { name: true, sku: true } } },
+          take: 15,
+          orderBy: { quantityOnHand: "asc" },
+        }),
+        prisma.lead.findMany({
+          where: { status: { in: ["Active", "Qualified", "Contacted"] } },
+          take: 20,
+          orderBy: { updatedAt: "desc" },
+          select: { name: true, status: true },
+        }),
+      ]);
 
+      // ── 9d. Context-aware message builders ─────────────────────────────
+      // Each builder returns a message string using real data, with fallback
+      // to a sensible generic if no data is available
+
+      function salesGroupMsg(): string {
+        const templates: (() => string | null)[] = [
+          // Deal progression
+          () => {
+            const d = pick(ctxDeals);
+            if (!d) return null;
+            return pick([
+              `Moved ${d.name} to ${d.stage} — ${d.contact} is responsive, looking good`,
+              `${d.contact} wants to close ${d.name} (${d.value}) by end of week`,
+              `Pipeline update: ${d.name} at ${d.stage}, next step is sending revised proposal`,
+              `Good call with ${d.contact} on ${d.name}, they're comparing options but we're the front-runner`,
+            ]);
+          },
+          // Order updates
+          () => {
+            const o = pick(ctxOrders);
+            if (!o) return null;
+            return pick([
+              `${o.orderNumber} for ${o.contact} is ${o.orderStatus} — following up on payment timeline`,
+              `Just confirmed ${o.orderNumber} (${o.value}) with ${o.contact}, processing now`,
+              `${o.contact} asked about shipping ETA for ${o.orderNumber}, checking with warehouse`,
+              `Order ${o.orderNumber} ready to move to next stage, ${o.contact} approved the terms`,
+            ]);
+          },
+          // Customer follow-up
+          () => {
+            const l = pick(ctxLeads);
+            if (!l) return null;
+            return pick([
+              `Following up with ${l.name} — they were interested in bulk pricing`,
+              `${l.name} requested a callback, scheduling for tomorrow morning`,
+              `New inquiry from ${l.name}, adding to pipeline and sending intro email`,
+              `${l.name} asked about payment terms, forwarding details to accounts`,
+            ]);
+          },
+          // Discount / quote
+          () => {
+            const d = pick(ctxDeals);
+            if (!d) return null;
+            const pct = pick(["3%", "5%", "7%", "8%", "10%"]);
+            return pick([
+              `Can we offer ${pct} on ${d.name}? ${d.contact} is comparing with another supplier`,
+              `${d.contact} is asking for ${pct} discount on ${d.name} (${d.value}) — thoughts?`,
+              `Sent revised quote for ${d.name} to ${d.contact}, waiting for sign-off`,
+            ]);
+          },
+        ];
+        // Try templates until one produces a message
+        const shuffled = templates.sort(() => Math.random() - 0.5);
+        for (const fn of shuffled) {
+          const msg = fn();
+          if (msg) return msg;
+        }
+        return "Reviewing the pipeline, will update the team shortly";
+      }
+
+      function opsGroupMsg(): string {
+        const templates: (() => string | null)[] = [
+          // Low stock
+          () => {
+            const inv = pick(ctxLowStock);
+            if (!inv?.part) return null;
+            const threshold = inv.reorderPoint > 0 ? inv.reorderPoint : 5;
+            return pick([
+              `${inv.part.name} (${inv.part.sku}) down to ${inv.quantityOnHand} units — reorder point is ${threshold}`,
+              `Flagging ${inv.part.sku}: only ${inv.quantityOnHand} left, need to restock ${inv.part.name}`,
+              `Running low on ${inv.part.name}, ${inv.quantityOnHand} units remaining — placing supplier order`,
+            ]);
+          },
+          // Stock availability
+          () => {
+            const inv = ctxLowStock.length > 0
+              ? pick(ctxLowStock)
+              : null;
+            if (!inv?.part) return null;
+            return pick([
+              `Checked stock for ${inv.part.name}: ${inv.quantityOnHand} units available`,
+              `Stock update on ${inv.part.sku} (${inv.part.name}) — current count is ${inv.quantityOnHand}`,
+              `Inventory count done for ${inv.part.name}, marking ${inv.quantityOnHand} on hand`,
+            ]);
+          },
+          // Shipment / logistics
+          () => {
+            const o = pick(ctxOrders);
+            if (!o) return null;
+            return pick([
+              `Shipment for ${o.orderNumber} packed and ready for dispatch`,
+              `${o.orderNumber} (${o.contact}) — labels printed, pickup scheduled for today`,
+              `Delivery for ${o.orderNumber} dispatched, tracking shared with ${o.contact}`,
+            ]);
+          },
+          // Supplier restock
+          () => {
+            const inv = pick(ctxLowStock);
+            if (!inv?.part) return null;
+            return pick([
+              `Supplier confirmed restock of ${inv.part.name}, ETA 3-5 business days`,
+              `Purchase order submitted for ${inv.part.sku}, expecting delivery next week`,
+              `${inv.part.name} restock in transit — should arrive by Thursday`,
+            ]);
+          },
+        ];
+        const shuffled = templates.sort(() => Math.random() - 0.5);
+        for (const fn of shuffled) {
+          const msg = fn();
+          if (msg) return msg;
+        }
+        return "Running through the warehouse checklist, updates coming shortly";
+      }
+
+      function crossTeamMsg(): { body: string; targetGroup: string } {
+        // Sales → Ops or Ops → Sales
+        if (Math.random() < 0.5) {
+          const inv = pick(ctxLowStock);
+          const d = pick(ctxDeals);
+          if (inv?.part && d) {
+            return {
+              body: `Can someone check availability of ${inv.part.name} (${inv.part.sku})? Need it for ${d.contact}'s order`,
+              targetGroup: "Operations Team",
+            };
+          }
+        }
+        const o = pick(ctxOrders);
+        if (o) {
+          return {
+            body: `Stock confirmed for ${o.orderNumber} — all items packed and ready, ${o.contact} can expect dispatch today`,
+            targetGroup: "Sales Team",
+          };
+        }
+        return {
+          body: "Checking pending items with the warehouse, will confirm availability shortly",
+          targetGroup: Math.random() < 0.5 ? "Sales Team" : "Operations Team",
+        };
+      }
+
+      function privateDmMsg(senderRole: string): string {
+        if (senderRole === "manager" || senderRole === "admin") {
+          const d = pick(ctxDeals);
+          if (d) {
+            return pick([
+              `How's ${d.name} progressing? ${d.contact} seemed interested last week`,
+              `Any update on ${d.name}? We need to close this one by end of quarter`,
+              `Make sure ${d.name} (${d.value}) is confirmed by EOD`,
+              `Let's prioritize ${d.contact}'s account this week — big potential`,
+            ]);
+          }
+          return "Need a status update on your active deals — let's sync up today";
+        }
+        // sales_rep / senior_rep → manager
+        const d = pick(ctxDeals);
+        if (d) {
+          const pct = pick(["5%", "7%", "8%", "10%"]);
+          return pick([
+            `Need approval on discount for ${d.contact} — they want ${pct} off on ${d.value}`,
+            `${d.contact} is ready to sign on ${d.name}, just needs manager approval`,
+            `Quick question on ${d.name} — client wants expedited shipping, okay to proceed?`,
+            `${d.name} update: ${d.contact} confirmed interest, sending proposal now`,
+          ]);
+        }
+        return "Working through my pipeline, will send end-of-day summary";
+      }
+
+      // ── 9e. Message volume by slot ─────────────────────────────────────
+      const slotGroupCount: Record<RunSlot, [number, number]> = {
+        "morning": [2, 3], "mid-morning": [1, 2], "midday": [1, 2],
+        "early-afternoon": [2, 3], "late-afternoon": [1, 2], "eod": [1, 2],
+      };
+      const slotDmCount: Record<RunSlot, [number, number]> = {
+        "morning": [1, 2], "mid-morning": [1, 2], "midday": [0, 1],
+        "early-afternoon": [1, 2], "late-afternoon": [0, 1], "eod": [1, 2],
+      };
+
+      const [grpMin, grpMax] = slotGroupCount[run];
+      const [dmMin, dmMax] = slotDmCount[run];
+      const targetGroupMsgs = Math.max(1, Math.round(randInt(grpMin, grpMax) * growth));
+      const targetDmMsgs = Math.round(randInt(dmMin, dmMax) * growth);
+
+      // ── 9f. Generate group messages ────────────────────────────────────
+      // Split between Sales, Ops, and occasional cross-team
+      const usedBodies = new Set<string>(); // deduplicate within this run
+
+      for (let i = 0; i < targetGroupMsgs; i++) {
+        // 20% chance of cross-team message
+        const isCross = i > 0 && Math.random() < 0.2;
+
+        let convId: string;
+        let body: string;
+        let senderPool: typeof allEmps;
+
+        if (isCross) {
+          const ct = crossTeamMsg();
+          body = ct.body;
+          convId = teamConvs[ct.targetGroup] ?? teamConvs["Sales Team"];
+          senderPool = ct.targetGroup === "Sales Team"
+            ? allEmps.filter((e) => !["sales_rep", "senior_rep"].includes(e.role))
+            : salesReps.length > 0 ? salesReps : nonAdmins;
+        } else if (i % 2 === 0 && teamConvs["Sales Team"]) {
+          body = salesGroupMsg();
+          convId = teamConvs["Sales Team"];
+          senderPool = salesReps.length > 0 ? [...salesReps, ...managers] : nonAdmins;
+        } else {
+          body = opsGroupMsg();
+          convId = teamConvs["Operations Team"] ?? teamConvs["Sales Team"];
+          senderPool = nonAdmins.length > 0 ? nonAdmins : allEmps;
+        }
+
+        // Skip duplicate messages within the same run
+        if (usedBodies.has(body)) continue;
+        usedBodies.add(body);
+
+        const sender = pick(senderPool) ?? allEmps[0];
+        if (!sender || !convId) continue;
+
+        await prisma.chatMessage.create({
+          data: {
+            conversationId: convId,
+            senderId: sender.id,
+            senderName: sender.name,
+            senderRole: sender.role,
+            body,
+          },
+        });
+        msgsCreated++;
+      }
+
+      // ── 9g. Generate private DM messages ───────────────────────────────
+      // Find or create DM conversations with efficient lookup
+      const existingDms = await prisma.chatConversation.findMany({
+        where: { type: "direct" },
+        select: { id: true, members: true },
+        take: 100,
+        orderBy: { updatedAt: "desc" },
+      });
+
+      for (let i = 0; i < targetDmMsgs; i++) {
+        // Pick realistic sender → receiver pairs
+        let sender: typeof allEmps[0];
+        let receiver: typeof allEmps[0];
+
+        const pairType = Math.random();
+        if (pairType < 0.4 && managers.length > 0 && salesReps.length > 0) {
+          // Manager → rep
+          sender = pick(managers);
+          receiver = pick(salesReps);
+        } else if (pairType < 0.7 && salesReps.length > 0 && managers.length > 0) {
+          // Rep → manager
+          sender = pick(salesReps);
+          receiver = pick(managers);
+        } else if (nonAdmins.length >= 2) {
+          // Rep → rep (cross-team)
+          sender = pick(nonAdmins);
+          receiver = pick(nonAdmins.filter((e) => e.id !== sender.id));
+        } else {
+          continue;
+        }
+        if (!sender || !receiver || sender.id === receiver.id) continue;
+
+        // Find existing DM
         let convId: string | undefined;
-        for (const c of existingConvs) {
+        for (const c of existingDms) {
           try {
             const m = JSON.parse(c.members) as string[];
-            if (m.includes(sender.id) && m.includes(receiver.id)) { convId = c.id; break; }
+            if (m.includes(sender.id) && m.includes(receiver.id)) {
+              convId = c.id;
+              break;
+            }
           } catch { /* skip */ }
         }
 
         if (!convId) {
-          // Admin auto-included in all conversations
           const dmMembers = [...new Set([sender.id, receiver.id, ...(adminId ? [adminId] : [])])];
           const conv = await prisma.chatConversation.create({
             data: {
@@ -554,13 +819,12 @@ export async function POST(request: NextRequest) {
             },
           });
           convId = conv.id;
+          existingDms.push({ id: conv.id, members: JSON.stringify(dmMembers) });
         }
 
-        const msgs = sender.role === "manager" || sender.role === "admin"
-          ? managerMessages
-          : sender.role === "sales_rep"
-            ? salesMessages
-            : warehouseMessages;
+        const body = privateDmMsg(sender.role);
+        if (usedBodies.has(body)) continue;
+        usedBodies.add(body);
 
         await prisma.chatMessage.create({
           data: {
@@ -568,23 +832,33 @@ export async function POST(request: NextRequest) {
             senderId: sender.id,
             senderName: sender.name,
             senderRole: sender.role,
-            body: pick(msgs),
+            body,
           },
         });
         msgsCreated++;
       }
-      log.push(`Chat: ${msgsCreated} messages sent`);
+
+      if (groupsCreated > 0) log.push(`Chat: created ${groupsCreated} team groups`);
+      log.push(`Chat: ${msgsCreated} messages sent (${targetGroupMsgs} group + ${targetDmMsgs} DM target)`);
     }
 
-    // ── Audit log: record this automation run ──────────────────────────
+    // ── Audit log: record this automation run with full metrics ────────
+    const elapsed = Math.round(performance.now() - t0);
+
     await auditLog({
       action: `automation.${run}`,
       entity: "System",
       userName: "Automation",
-      details: { run, log, timeMs: Math.round(performance.now() - t0) },
+      details: {
+        run,
+        success: true,
+        growth: Math.round(growth * 100),
+        slotMultiplier: slotMultiplier(run),
+        timeMs: elapsed,
+        timestamp: new Date().toISOString(),
+        log,
+      },
     });
-
-    const elapsed = Math.round(performance.now() - t0);
 
     return NextResponse.json({
       run,
@@ -596,6 +870,23 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error(`[AUTOMATION] ${run} failed:`, msg);
+
+    // Log failure to audit trail
+    await auditLog({
+      action: `automation.${run}.error`,
+      entity: "System",
+      userName: "Automation",
+      details: {
+        run,
+        success: false,
+        error: msg,
+        growth: Math.round(growth * 100),
+        timeMs: Math.round(performance.now() - t0),
+        timestamp: new Date().toISOString(),
+        logSoFar: log,
+      },
+    });
+
     try { await prisma.$disconnect(); } catch { /* ignore */ }
     return NextResponse.json({ error: msg, log }, { status: 500 });
   }
